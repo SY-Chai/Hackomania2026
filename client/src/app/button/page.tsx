@@ -8,7 +8,6 @@ import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { resolveSocketServerUrl } from "@/lib/socket";
 import { resampleTo24k, schedulePcm16Playback } from "@/lib/audio";
-import { supabaseBrowser } from "@/lib/supabase";
 
 type ChatMessage = {
   id: string;
@@ -23,21 +22,7 @@ function ButtonPageContent() {
 
   useEffect(() => {
     const param = searchParams.get("pab_id");
-    if (param === "random") {
-      // Fetch a random PAB
-      supabaseBrowser
-        .from("pabs")
-        .select("id")
-        .limit(10)
-        .then(({ data }: { data: { id: string }[] | null }) => {
-          if (data && data.length > 0) {
-            const randomPab = data[Math.floor(Math.random() * data.length)];
-            setPabId(randomPab.id);
-          }
-        });
-    } else if (param) {
-      setPabId(param);
-    }
+    if (param) setPabId(param);
   }, [searchParams]);
 
   const [messages, setMessages] = useState<ChatMessage[]>([
