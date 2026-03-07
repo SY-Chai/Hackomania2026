@@ -13,7 +13,7 @@ export interface DBConversation {
   start: string | null;
   end: string | null;
   triage: string | null;
-  classification: string | null;
+  // classification: string | null;
   severity: "urgent" | "uncertain" | "non_urgent" | null;
   severity_conf: number | null;
   severity_reason: string | null;
@@ -63,7 +63,7 @@ export async function fetchConversations(): Promise<DBConversation[]> {
 }
 
 const CONVERSATION_COLS =
-  "id,start,end,triage,classification,severity,severity_conf,severity_reason,summary,audio_url";
+  "id,start,end,triage,severity,severity_conf,severity_reason,summary,audio_url";
 const MESSAGE_COLS =
   "id,author_id,content,timestamp,conversation_id,users(type)";
 

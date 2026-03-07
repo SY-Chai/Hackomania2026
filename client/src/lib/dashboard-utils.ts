@@ -5,7 +5,7 @@ import type {
 } from "@/components/dashboard/conversations-view";
 import type { PABMarker } from "@/components/map/singapore-map";
 
-const CLOSED_STATUSES = new Set(["resolved", "closed", "completed", "done"]);
+// const CLOSED_STATUSES = new Set(["resolved", "closed", "completed", "done"]);
 
 export function deriveRole(
   userType: string | null | undefined,
@@ -34,9 +34,7 @@ export function sortMessages<T extends { timestamp: string }>(
 }
 
 export function isOngoing(c: DBConversation): boolean {
-  return (
-    !c.classification || !CLOSED_STATUSES.has(c.classification.toLowerCase())
-  );
+  return !c.end;
 }
 
 export function toUIConversations(
@@ -70,7 +68,7 @@ export function toUIConversations(
       id: c.id,
       pabId: seniorMsg?.author_id ?? null,
       phase: normalizePhase(c.triage),
-      classification: c.classification,
+      // classification: c.classification,
       severity: c.severity,
       severityConf: c.severity_conf,
       severityReason: c.severity_reason,
