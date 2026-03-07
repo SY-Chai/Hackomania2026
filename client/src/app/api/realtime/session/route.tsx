@@ -20,8 +20,10 @@ export async function POST() {
       },
     });
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const anySession = session as any;
     return Response.json({
-      client_secret: session.client_secret?.value ?? session.value,
+      client_secret: anySession.client_secret?.value ?? anySession.value,
     });
   } catch (error: any) {
     console.error("Realtime session creation failed:", error);

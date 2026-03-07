@@ -3,9 +3,7 @@
 import { useState, useCallback } from "react";
 import Map, { Marker, Popup } from "react-map-gl/mapbox";
 import "mapbox-gl/dist/mapbox-gl.css";
-import { stationaryPABs, wearablePABAggregates } from "@/lib/mock-data";
-import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, MapPin, Users } from "lucide-react";
+import { MapPin, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
@@ -16,26 +14,23 @@ const statusConfig = {
   inactive: { color: "bg-slate-400", border: "border-slate-500", label: "Inactive", badge: "bg-slate-100 text-slate-600" },
 };
 
-function getWearableColor(count: number) {
-  if (count >= 30) return "#1e40af";
-  if (count >= 20) return "#3b82f6";
-  if (count >= 10) return "#93c5fd";
-  return "#dbeafe";
+export interface PABMarker {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+  status: "active" | "alert" | "inactive";
+  address: string;
+  town: string;
 }
 
-function getWearableSize(count: number) {
-  if (count >= 30) return 44;
-  if (count >= 20) return 36;
-  if (count >= 10) return 30;
-  return 24;
+interface Props {
+  pabs: PABMarker[];
 }
 
-type SelectedItem =
-  | { type: "stationary"; data: (typeof stationaryPABs)[number] }
-  | { type: "wearable"; data: (typeof wearablePABAggregates)[number] }
-  | null;
+type SelectedItem = { type: "stationary"; data: PABMarker } | null;
 
-export function SingaporeMap() {
+export function SingaporeMap({ pabs }: Props) {
   const [selected, setSelected] = useState<SelectedItem>(null);
 
   const handleClose = useCallback(() => setSelected(null), []);
@@ -53,34 +48,8 @@ export function SingaporeMap() {
         mapboxAccessToken={MAPBOX_TOKEN}
         attributionControl={false}
       >
-        {/* Wearable PAB aggregate circles */}
-        {wearablePABAggregates.map((agg) => {
-          const size = getWearableSize(agg.count);
-          const color = getWearableColor(agg.count);
-          return (
-            <Marker
-              key={`wearable-${agg.town}`}
-              longitude={agg.lng}
-              latitude={agg.lat}
-              anchor="center"
-            >
-              <button
-                className="flex items-center justify-center rounded-full border-2 border-white shadow-md transition-transform hover:scale-110 cursor-pointer"
-                style={{ width: size, height: size, backgroundColor: color }}
-                onClick={() => setSelected({ type: "wearable", data: agg })}
-                title={`${agg.town}: ${agg.count} wearables`}
-              >
-                <span className="text-white font-bold" style={{ fontSize: size > 36 ? 12 : 10 }}>
-                  {agg.count}
-                </span>
-              </button>
-            </Marker>
-          );
-        })}
-
-        {/* Stationary PAB markers */}
-        {stationaryPABs.map((pab) => {
-          const cfg = statusConfig[pab.status as keyof typeof statusConfig];
+        {pabs.map((pab) => {
+          const cfg = statusConfig[pab.status];
           const isAlert = pab.status === "alert";
           return (
             <Marker
@@ -103,7 +72,6 @@ export function SingaporeMap() {
           );
         })}
 
-        {/* Popup for stationary PAB */}
         {selected?.type === "stationary" && (
           <Popup
             longitude={selected.data.lng}
@@ -119,16 +87,13 @@ export function SingaporeMap() {
                 <MapPin className="w-3.5 h-3.5 text-slate-500" />
                 <span className="text-xs font-semibold text-slate-800">{selected.data.name}</span>
               </div>
-              <p className="text-xs text-slate-500 mb-2">{selected.data.address}</p>
+              {selected.data.address && (
+                <p className="text-xs text-slate-500 mb-2">{selected.data.address}</p>
+              )}
               <div className="flex items-center justify-between">
                 <span className="text-xs text-slate-500">Status</span>
-                <span
-                  className={cn(
-                    "text-xs font-medium px-2 py-0.5 rounded-full",
-                    statusConfig[selected.data.status as keyof typeof statusConfig].badge
-                  )}
-                >
-                  {statusConfig[selected.data.status as keyof typeof statusConfig].label}
+                <span className={cn("text-xs font-medium px-2 py-0.5 rounded-full", statusConfig[selected.data.status].badge)}>
+                  {statusConfig[selected.data.status].label}
                 </span>
               </div>
               {selected.data.status === "alert" && (
@@ -137,38 +102,6 @@ export function SingaporeMap() {
                   <span className="text-xs font-medium">Alert in progress</span>
                 </div>
               )}
-            </div>
-          </Popup>
-        )}
-
-        {/* Popup for wearable aggregate */}
-        {selected?.type === "wearable" && (
-          <Popup
-            longitude={selected.data.lng}
-            latitude={selected.data.lat}
-            onClose={handleClose}
-            closeButton
-            closeOnClick={false}
-            offset={22}
-          >
-            <div className="p-1 min-w-[160px]">
-              <div className="flex items-center gap-1.5 mb-1.5">
-                <Users className="w-3.5 h-3.5 text-blue-500" />
-                <span className="text-xs font-semibold text-slate-800">{selected.data.town}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-slate-500">Wearable PABs</span>
-                <span className="text-xs font-bold text-blue-700">{selected.data.count}</span>
-              </div>
-              <div className="flex items-center justify-between mt-1">
-                <span className="text-xs text-slate-500">Trend</span>
-                <span className={cn(
-                  "text-xs font-medium",
-                  selected.data.trend === "up" ? "text-emerald-600" : selected.data.trend === "down" ? "text-red-500" : "text-slate-500"
-                )}>
-                  {selected.data.trend === "up" ? "↑ Rising" : selected.data.trend === "down" ? "↓ Falling" : "→ Stable"}
-                </span>
-              </div>
             </div>
           </Popup>
         )}
@@ -189,12 +122,6 @@ export function SingaporeMap() {
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 rounded-full bg-slate-400 border-2 border-slate-500" />
             <span className="text-slate-600">Stationary PAB — Offline</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded-full bg-blue-500 border-2 border-white flex items-center justify-center">
-              <span className="text-white font-bold text-[8px]">N</span>
-            </div>
-            <span className="text-slate-600">Wearable count by town</span>
           </div>
         </div>
       </div>
