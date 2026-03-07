@@ -148,7 +148,7 @@ export function SingaporeMap({ pabs }: Props) {
   const ongoingCount = pabs.filter((p) => p.status === "call").length;
 
   return (
-    <div className="relative w-full h-full rounded-xl overflow-hidden">
+    <div className="relative w-full h-full overflow-hidden">
       <Map
         ref={mapRef}
         initialViewState={{ longitude: 103.8198, latitude: 1.3521, zoom: 10.8 }}
@@ -219,7 +219,7 @@ export function SingaporeMap({ pabs }: Props) {
         <button
           onClick={() => setFilterOngoingOnly((v) => !v)}
           className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border shadow-sm transition-colors",
+            "flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border shadow-sm transition-colors",
             filterOngoingOnly
               ? "bg-red-500 text-white border-red-500"
               : "bg-white text-slate-700 border-slate-200 hover:border-slate-300",
@@ -233,7 +233,7 @@ export function SingaporeMap({ pabs }: Props) {
       </div>
 
       {/* Legend */}
-      <div className="absolute bottom-4 left-4 bg-white rounded-lg border border-slate-200 shadow-sm p-3 text-xs space-y-2">
+      <div className="absolute bottom-4 left-4 bg-white rounded border border-slate-200 shadow-sm p-3 text-xs space-y-2">
         <p className="font-semibold text-slate-700 mb-1">Legend</p>
         <div className="space-y-1.5">
           <div className="flex items-center gap-2">

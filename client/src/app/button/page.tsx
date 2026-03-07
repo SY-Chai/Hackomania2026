@@ -291,31 +291,31 @@ export default function Page() {
   }, [stopConversation]);
 
   return (
-    <main className="min-h-screen bg-gray-50 text-gray-900">
+    <main className="min-h-screen bg-slate-50 text-slate-900">
       <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[1.25fr_0.75fr]">
-        <section className="flex flex-col border-b border-gray-200 lg:border-r lg:border-b-0">
-          <div className="border-b border-gray-200 px-6 py-5">
+        <section className="flex flex-col border-b border-slate-200 lg:border-r lg:border-b-0">
+          <div className="border-b border-slate-200 px-6 py-5">
             <p className="text-xs uppercase tracking-[0.2em] text-red-500">
               Personal Alert Button
             </p>
-            <h1 className="mt-2 text-3xl font-semibold text-gray-900">
+            <h1 className="mt-2 text-3xl font-semibold text-slate-900">
               Live Emergency Conversation
             </h1>
-            <p className="mt-2 text-sm text-gray-500">
+            <p className="mt-2 text-sm text-slate-500">
               Voice conversation appears here after the red button is pressed.
             </p>
           </div>
 
-          <div className="flex items-center gap-3 border-b border-gray-200 px-6 py-4 text-sm">
+          <div className="flex items-center gap-3 border-b border-slate-200 px-6 py-4 text-sm">
             <div
               className={`h-2.5 w-2.5 rounded-full ${isConnected
                   ? "bg-green-500"
                   : isConnecting
                     ? "bg-yellow-500"
-                    : "bg-gray-300"
+                    : "bg-slate-300"
                 }`}
             />
-            <span className="text-gray-700">{status}</span>
+            <span className="text-slate-700">{status}</span>
           </div>
 
           <div className="flex-1 space-y-4 overflow-y-auto px-6 py-6">
@@ -326,15 +326,15 @@ export default function Page() {
               return (
                 <div
                   key={message.id}
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm ${isUser
-                      ? "ml-auto bg-red-600 text-white"
+                  className={`max-w-[85%] rounded px-4 py-3 text-sm leading-6 ${isUser
+                      ? "ml-auto bg-slate-900 text-white"
                       : isAssistant
-                        ? "bg-gray-100 text-gray-900"
-                        : "bg-gray-200 text-gray-700"
+                        ? "bg-slate-100 text-slate-900 border border-slate-200"
+                        : "bg-white text-slate-600 border border-slate-200"
                     }`}
                 >
                   <div
-                    className={`mb-1 text-xs font-medium uppercase tracking-wide ${isUser ? "text-red-100" : "text-gray-500"
+                    className={`mb-1 text-xs font-medium uppercase tracking-wide ${isUser ? "text-slate-400" : "text-slate-400"
                       }`}
                   >
                     {isUser ? "Senior" : isAssistant ? "AI Responder" : "System"}
@@ -345,7 +345,7 @@ export default function Page() {
             })}
 
             {error && (
-              <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <div className="flex items-start gap-3 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 <AlertCircle className="mt-0.5 size-4 shrink-0" />
                 <div>{error}</div>
               </div>
@@ -355,13 +355,13 @@ export default function Page() {
 
         <aside className="flex flex-col items-center justify-center gap-8 px-6 py-10 bg-white">
           <div className="text-center">
-            <p className="text-sm uppercase tracking-[0.24em] text-gray-400">
+            <p className="text-sm uppercase tracking-[0.24em] text-slate-400">
               Emergency Trigger
             </p>
-            <h2 className="mt-2 text-2xl font-semibold text-gray-900">
+            <h2 className="mt-2 text-2xl font-semibold text-slate-900">
               Press to start voice help
             </h2>
-            <p className="mt-2 max-w-sm text-sm text-gray-500">
+            <p className="mt-2 max-w-sm text-sm text-slate-500">
               The button starts a live voice session with the AI emergency assistant.
             </p>
           </div>
@@ -388,8 +388,8 @@ export default function Page() {
             )}
           </Button>
 
-          <div className="max-w-sm rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700 shadow-sm">
-            <div className="mb-2 font-medium text-gray-900">System Architecture</div>
+          <div className="max-w-sm rounded border border-slate-200 bg-white p-4 text-sm text-slate-700">
+            <div className="mb-2 font-medium text-slate-900">System Architecture</div>
             <p>
               This version securely proxies bidirectional audio via WebSockets on the Node.js backend. The frontend captures audio, streams to the backend, and the backend communicates with OpenAI.
             </p>
