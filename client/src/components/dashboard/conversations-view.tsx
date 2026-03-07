@@ -801,7 +801,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 >
                   {severityConfig[selected.severity].label}
                   {selected.severityConf != null
-                    ? ` ${(selected.severityConf * 100).toFixed(0)}%`
+                    ? ` ${selected.severityConf}%`
                     : ""}
                 </span>
               )}
