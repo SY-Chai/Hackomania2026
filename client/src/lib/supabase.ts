@@ -13,6 +13,9 @@ export interface DBConversation {
   end: string | null;
   triage: string | null;
   classification: string | null;
+  severity: "urgent" | "uncertain" | "non_urgent" | null;
+  severity_conf: number | null;
+  severity_reason: string | null;
   summary: string | null;
   audio_url: string | null;
 }
