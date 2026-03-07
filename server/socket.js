@@ -31,6 +31,29 @@ function normalizeConfidence(value) {
   return Math.round(Math.max(0, Math.min(1, num)) * 100);
 }
 
+function normalizeOperatorSummary(value) {
+  const summary = value && typeof value === "object" ? value : {};
+  const asArray = (arr) =>
+    Array.isArray(arr)
+      ? arr
+          .map((item) => String(item || "").trim())
+          .filter(Boolean)
+          .slice(0, 5)
+      : [];
+
+  return {
+    incident_overview:
+      String(summary.incident_overview || "").trim() ||
+      "Conversation summary unavailable yet.",
+    key_symptoms: asArray(summary.key_symptoms),
+    risk_factors: asArray(summary.risk_factors),
+    actions_taken: asArray(summary.actions_taken),
+    recommended_next_step:
+      String(summary.recommended_next_step || "").trim() ||
+      "Gather more details and continue monitoring.",
+  };
+}
+
 async function assessConversationSeverity(turns) {
   if (!process.env.OPENAI_API_KEY || !turns.length) return null;
 
@@ -82,6 +105,13 @@ async function assessConversationSeverity(turns) {
               '  "severity": "urgent|uncertain|non_urgent",',
               '  "severity_conf": 0..1,',
               '  "severity_reason": "short operator-facing reason",',
+              '  "operator_summary": {',
+              '    "incident_overview": "one-line context",',
+              '    "key_symptoms": ["symptom 1", "symptom 2"],',
+              '    "risk_factors": ["risk 1"],',
+              '    "actions_taken": ["action already done in call"],',
+              '    "recommended_next_step": "single immediate next step for operator"',
+              "  },",
               '  "rubric_scores": {',
               '    "life_threat": 0..5,',
               '    "instability": 0..5,',
@@ -113,6 +143,40 @@ async function assessConversationSeverity(turns) {
               },
               severity_conf: { type: "number", minimum: 0, maximum: 1 },
               severity_reason: { type: "string", minLength: 1, maxLength: 240 },
+              operator_summary: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  incident_overview: { type: "string", minLength: 1, maxLength: 240 },
+                  key_symptoms: {
+                    type: "array",
+                    items: { type: "string", minLength: 1, maxLength: 120 },
+                    maxItems: 5,
+                  },
+                  risk_factors: {
+                    type: "array",
+                    items: { type: "string", minLength: 1, maxLength: 120 },
+                    maxItems: 5,
+                  },
+                  actions_taken: {
+                    type: "array",
+                    items: { type: "string", minLength: 1, maxLength: 120 },
+                    maxItems: 5,
+                  },
+                  recommended_next_step: {
+                    type: "string",
+                    minLength: 1,
+                    maxLength: 180,
+                  },
+                },
+                required: [
+                  "incident_overview",
+                  "key_symptoms",
+                  "risk_factors",
+                  "actions_taken",
+                  "recommended_next_step",
+                ],
+              },
               rubric_scores: {
                 type: "object",
                 additionalProperties: false,
@@ -137,6 +201,7 @@ async function assessConversationSeverity(turns) {
               "severity",
               "severity_conf",
               "severity_reason",
+              "operator_summary",
               "rubric_scores",
               "risk_0_to_1",
             ],
@@ -164,6 +229,7 @@ async function assessConversationSeverity(turns) {
     severity_reason: String(
       parsed?.severity_reason || "No rationale provided.",
     ),
+    operator_summary: normalizeOperatorSummary(parsed?.operator_summary),
   };
 }
 
@@ -199,6 +265,13 @@ export function setupSocket(io) {
       severity: "uncertain",
       severity_conf: 25,
       severity_reason: "Awaiting enough context to assess severity.",
+      operator_summary: {
+        incident_overview: "Conversation started. Awaiting transcript details.",
+        key_symptoms: [],
+        risk_factors: [],
+        actions_taken: [],
+        recommended_next_step: "Continue gathering details from the senior.",
+      },
     };
 
     const queueTriage = () => {
@@ -229,6 +302,8 @@ export function setupSocket(io) {
         if (urgentDowngradeStreak < 2) {
           return {
             ...latestSeverity,
+            operator_summary:
+              nextSeverity.operator_summary ?? latestSeverity.operator_summary,
             severity_reason: `Holding urgent until reconfirmed: ${nextSeverity.severity_reason}`,
           };
         }
@@ -243,6 +318,9 @@ export function setupSocket(io) {
     const persistAndBroadcastSeverity = async (assessment) => {
       if (!activeConversationId) return;
       latestSeverity = assessment;
+      const serializedSummary = assessment.operator_summary
+        ? JSON.stringify(assessment.operator_summary)
+        : null;
 
       if (supabase) {
         const { error } = await supabase
@@ -251,6 +329,7 @@ export function setupSocket(io) {
             severity: assessment.severity,
             severity_conf: assessment.severity_conf,
             severity_reason: assessment.severity_reason,
+            summary: serializedSummary,
           })
           .eq("id", activeConversationId);
 
@@ -269,6 +348,7 @@ export function setupSocket(io) {
         severity: assessment.severity,
         severity_conf: assessment.severity_conf,
         severity_reason: assessment.severity_reason,
+        operator_summary: assessment.operator_summary ?? null,
         updatedAt: new Date().toISOString(),
       });
     };
@@ -357,10 +437,11 @@ export function setupSocket(io) {
               start: getUTC8Time(),
               end: getUTC8Time(),
               triage: "agent",
-              classification: "uncertain",
+              // classification: "uncertain",
               severity: "uncertain",
               severity_conf: 25,
               severity_reason: "Awaiting enough context to assess severity.",
+              summary: JSON.stringify(latestSeverity.operator_summary),
             },
           ])
           .select();
