@@ -44,13 +44,57 @@ export function resampleTo24k(input: Float32Array, inputSampleRate: number): Int
   return float32ToInt16(result);
 }
 
+// ---------------------------------------------------------------------------
+// Simple energy-based VAD for gating mic audio before sending to the backend.
+// ---------------------------------------------------------------------------
+const VAD_SPEECH_THRESHOLD = 0.01; // float32 RMS threshold
+const VAD_SILENCE_FRAMES = 10;    // ~850 ms at 4096-sample frames @ 48 kHz
+const VAD_MIN_SPEECH_FRAMES = 6;  // ~500 ms of speech required before we consider it valid
+
+let vadSpeechActive = false;
+let vadSilenceCount = 0;
+let vadSpeechFrameCount = 0;
+
+export function resetVadState(): void {
+  vadSpeechActive = false;
+  vadSilenceCount = 0;
+  vadSpeechFrameCount = 0;
+}
+
 /**
- * Resample Float32Array from inputSampleRate to 24kHz and return as PCM16 bytes (ArrayBuffer).
- * Convenience wrapper used by the MicVAD onSpeechEnd callback.
+ * Returns "speech" | "silence_after_speech" | "silence".
+ * - "speech": audio contains speech, should be sent
+ * - "silence_after_speech": speech just ended, send a commit signal
+ * - "silence": no speech, skip sending
  */
-export function float32ToPcm16Buffer(input: Float32Array, inputSampleRate: number): ArrayBuffer {
-  const pcm16 = resampleTo24k(input, inputSampleRate);
-  return pcm16.buffer as ArrayBuffer;
+export function classifyChunk(float32: Float32Array): "speech" | "silence_after_speech" | "silence" {
+  // Compute RMS energy
+  let sum = 0;
+  for (let i = 0; i < float32.length; i++) sum += float32[i] * float32[i];
+  const rms = Math.sqrt(sum / float32.length);
+
+  if (rms > VAD_SPEECH_THRESHOLD) {
+    vadSpeechActive = true;
+    vadSpeechFrameCount++;
+    vadSilenceCount = 0;
+    return "speech";
+  }
+
+  if (vadSpeechActive) {
+    vadSilenceCount++;
+    if (vadSilenceCount >= VAD_SILENCE_FRAMES) {
+      const hadEnoughSpeech = vadSpeechFrameCount >= VAD_MIN_SPEECH_FRAMES;
+      vadSpeechActive = false;
+      vadSilenceCount = 0;
+      vadSpeechFrameCount = 0;
+      // Only commit if there was enough speech; otherwise discard as noise
+      return hadEnoughSpeech ? "silence_after_speech" : "silence";
+    }
+    // Still within the grace period — keep sending (captures trailing audio)
+    return "speech";
+  }
+
+  return "silence";
 }
 
 export function schedulePcm16Playback(
