@@ -776,6 +776,42 @@ export function setupSocket(io) {
       stopTriageLoop();
     });
 
+    socket.on("operator_end_conversation", (conversationId) => {
+      if (!conversationId) return;
+      const session = liveConversationSessions.get(conversationId);
+      if (!session) {
+        socket.emit("operator_takeover_error", "This call is no longer live.");
+        return;
+      }
+
+      const isOperator = session.operatorSocketId === socket.id;
+      const isCaller = session.callerSocketId === socket.id;
+      if (!isOperator && !isCaller) {
+        socket.emit("operator_takeover_error", "Not authorized to end this call.");
+        return;
+      }
+
+      if (session.callerSocketId) {
+        io.to(session.callerSocketId).emit("force_end_emergency_session", {
+          conversationId,
+          endedBy: "operator",
+        });
+      }
+
+      if (session.source === "esp32" && isEsp32SessionLive(session)) {
+        try {
+          session.esp32Socket.close();
+        } catch (err) {
+          console.error(
+            `Failed to close ESP32 session ${conversationId} from operator end:`,
+            err,
+          );
+        }
+      }
+
+      io.to(conversationId).emit("operator_takeover_stopped", { conversationId });
+    });
+
     // ------------------------------------------------------------------
     // Operator takeover
     // ------------------------------------------------------------------
