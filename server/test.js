@@ -13,13 +13,17 @@ async function runTests() {
 
     // 2. Test Conversation Creation
     console.log('2. Testing Conversation Creation (/api/conversations)...');
+    let conversationId;
     const convRes = await fetch(`${baseUrl}/conversations`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        triage: 'agent',
+        classification: 'uncertain'
+      })
     });
     
     // We expect this to fail if the User hasn't created the 'conversations' table in Supabase yet.
-    let conversationId;
     if (!convRes.ok) {
         const err = await convRes.json();
         console.warn(`[Expected Warning if table missing] Failed to create conversation:`, err);
@@ -28,6 +32,19 @@ async function runTests() {
         console.log('Response:', convData);
         conversationId = convData.id;
         console.log(`Created Conversation ID: ${conversationId}\n`);
+        
+        // Test updating the conversation triage and classification
+        console.log('2a. Testing Conversation Update (/api/conversations/:id)...');
+        const updateRes = await fetch(`${baseUrl}/conversations/${conversationId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            triage: 'operator',
+            classification: 'urgent'
+          })
+        });
+        const updateData = await updateRes.json();
+        console.log('Updated Response:', updateData, '\n');
     }
 
     // 3. Test Message Creation
@@ -52,6 +69,33 @@ async function runTests() {
         const msgData = await messageRes.json();
         console.log('Response:', msgData);
         console.log(`Created Message ID: ${msgData.id}\n`);
+    }
+
+    // 4. Test Cloudflare R2 Audio Upload 
+    console.log('\n4. Testing Audio Upload (/api/upload-audio)...');
+    try {
+      // Create a blob/file from the dummy file to simulate an audio buffer upload
+      const dummyFileBuffer = fs.readFileSync('dummy.webm');
+      const blob = new Blob([dummyFileBuffer], { type: 'audio/webm' });
+      const formData = new FormData();
+      formData.append('audio', blob, 'dummy.webm');
+
+      const uploadRes = await fetch(`${baseUrl}/upload-audio`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!uploadRes.ok) {
+        const err = await uploadRes.json();
+        console.warn(`[Expected Warning if R2 keys invalid] Failed to upload audio:`, err);
+      } else {
+        const uploadData = await uploadRes.json();
+        console.log('Response:', uploadData);
+        console.log(`Uploaded Audio URL: ${uploadData.url}\n`);
+      }
+    } catch (err) {
+      console.log('Could not test R2 upload - make sure dummy.webm exists in the server folder.');
+      console.error(err);
     }
 
   } catch (error) {
