@@ -7,6 +7,104 @@ import { ASSISTANT_PROMPT } from "./prompt.js";
 const OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview";
 const MAX_ROLLING_CHUNKS = 20; // ~1.6 seconds of rolling historical context (4096 bytes per chunk)
 const MAX_CONVERSATION_PCM_BYTES = 50 * 1024 * 1024; // 50 MB cap per call
+const TRIAGE_INTERVAL_MS = Number(process.env.SEVERITY_REEVAL_MS || 10000);
+const TRIAGE_MAX_TURNS = 12;
+
+// ------------------------------------------------------------------
+// Severity assessment
+// ------------------------------------------------------------------
+
+function normalizeSeverity(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "urgent") return "urgent";
+  if (normalized === "non_urgent" || normalized === "not_urgent") return "non_urgent";
+  return "uncertain";
+}
+
+function normalizeConfidence(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0.5;
+  return Math.max(0, Math.min(1, num));
+}
+
+async function assessConversationSeverity(turns) {
+  if (!process.env.OPENAI_API_KEY || !turns.length) return null;
+
+  const transcript = turns
+    .map((turn) => `${turn.role.toUpperCase()}: ${turn.text}`)
+    .join("\n");
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: process.env.SEVERITY_MODEL || "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content: "You are a medical triage assistant for emergency elder-care calls. Output strict JSON only.",
+        },
+        {
+          role: "user",
+          content: [
+            "Classify this conversation into one severity:",
+            '- "urgent": life-threatening or likely life-threatening now.',
+            '- "uncertain": insufficient clarity, conflicting signals, or unable to confirm safety.',
+            '- "non_urgent": stable and not life-threatening at this moment.',
+            "Be conservative. If unsure, return uncertain.",
+            "",
+            "Return JSON with exactly these keys:",
+            '{ "severity": "urgent|uncertain|non_urgent", "severity_conf": 0..1, "severity_reason": "short reason for operator" }',
+            "",
+            "Conversation transcript:",
+            transcript,
+          ].join("\n"),
+        },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "severity_triage",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              severity: { type: "string", enum: ["urgent", "uncertain", "non_urgent"] },
+              severity_conf: { type: "number", minimum: 0, maximum: 1 },
+              severity_reason: { type: "string", minLength: 1, maxLength: 240 },
+            },
+            required: ["severity", "severity_conf", "severity_reason"],
+          },
+        },
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Severity model request failed (${response.status}): ${body || "empty body"}`);
+  }
+
+  const payload = await response.json();
+  const rawContent = payload?.choices?.[0]?.message?.content;
+  if (!rawContent) throw new Error("Severity model response missing content.");
+
+  const parsed = JSON.parse(rawContent);
+  return {
+    severity: normalizeSeverity(parsed?.severity),
+    severity_conf: normalizeConfidence(parsed?.severity_conf),
+    severity_reason: String(parsed?.severity_reason || "No rationale provided."),
+  };
+}
+
+// ------------------------------------------------------------------
+// Socket setup
+// ------------------------------------------------------------------
 
 export function setupSocket(io) {
   const notifyDashboard = () => io.emit("dashboard_update");
@@ -25,6 +123,120 @@ export function setupSocket(io) {
     let fullConversationPcm = [];
     let fullConversationPcmBytes = 0;
 
+    // Triage state
+    let triageTurns = [];
+    let triageIntervalHandle = null;
+    let triageInFlight = false;
+    let triageQueued = false;
+    let triageDirty = false;
+    let urgentDowngradeStreak = 0;
+    let latestSeverity = {
+      severity: "uncertain",
+      severity_conf: 0.25,
+      severity_reason: "Awaiting enough context to assess severity.",
+    };
+
+    const queueTriage = () => { triageDirty = true; };
+
+    const pushTriageTurn = (role, text) => {
+      const cleaned = String(text || "").trim();
+      if (!cleaned) return;
+      triageTurns.push({ role, text: cleaned });
+      if (triageTurns.length > TRIAGE_MAX_TURNS) {
+        triageTurns = triageTurns.slice(-TRIAGE_MAX_TURNS);
+      }
+      queueTriage();
+    };
+
+    const resolveSeverityTransition = (nextSeverity) => {
+      const current = latestSeverity.severity;
+      const proposed = nextSeverity.severity;
+
+      if (proposed === "urgent") {
+        urgentDowngradeStreak = 0;
+        return nextSeverity;
+      }
+
+      if (current === "urgent" && proposed !== "urgent") {
+        urgentDowngradeStreak += 1;
+        if (urgentDowngradeStreak < 2) {
+          return {
+            ...latestSeverity,
+            severity_reason: `Holding urgent until reconfirmed: ${nextSeverity.severity_reason}`,
+          };
+        }
+        urgentDowngradeStreak = 0;
+        return nextSeverity;
+      }
+
+      urgentDowngradeStreak = 0;
+      return nextSeverity;
+    };
+
+    const persistAndBroadcastSeverity = async (assessment) => {
+      if (!activeConversationId) return;
+      latestSeverity = assessment;
+
+      if (supabase) {
+        const { error } = await supabase
+          .from("conversations")
+          .update({
+            severity: assessment.severity,
+            severity_conf: assessment.severity_conf,
+            severity_reason: assessment.severity_reason,
+          })
+          .eq("id", activeConversationId);
+
+        if (error) {
+          console.error(`❌ Failed to persist severity for ${activeConversationId}:`, error);
+        } else {
+          notifyDashboard();
+        }
+      }
+
+      io.emit("severity_update", {
+        conversationId: activeConversationId,
+        severity: assessment.severity,
+        severity_conf: assessment.severity_conf,
+        severity_reason: assessment.severity_reason,
+        updatedAt: new Date().toISOString(),
+      });
+    };
+
+    const runTriage = async () => {
+      if (!triageDirty || !triageTurns.length || !activeConversationId) return;
+      if (triageInFlight) { triageQueued = true; return; }
+
+      triageInFlight = true;
+      triageDirty = false;
+      try {
+        const assessment = await assessConversationSeverity(triageTurns);
+        if (!assessment) return;
+        const stabilized = resolveSeverityTransition(assessment);
+        await persistAndBroadcastSeverity(stabilized);
+      } catch (err) {
+        console.error(`[Socket ${socket.id}] Severity triage failed:`, err);
+      } finally {
+        triageInFlight = false;
+        if (triageQueued) { triageQueued = false; queueTriage(); }
+      }
+    };
+
+    const startTriageLoop = () => {
+      if (triageIntervalHandle) return;
+      triageIntervalHandle = setInterval(() => {
+        runTriage().catch((err) => {
+          console.error(`[Socket ${socket.id}] Severity loop error:`, err);
+        });
+      }, TRIAGE_INTERVAL_MS);
+    };
+
+    const stopTriageLoop = () => {
+      if (!triageIntervalHandle) return;
+      clearInterval(triageIntervalHandle);
+      triageIntervalHandle = null;
+    };
+
     // ------------------------------------------------------------------
     // Emergency session
     // ------------------------------------------------------------------
@@ -42,7 +254,6 @@ export function setupSocket(io) {
 
       console.log(`[Socket ${socket.id}] Starting emergency session with OpenAI`);
 
-      // Auto-create a Supabase conversation
       if (supabase) {
         const { data, error } = await supabase
           .from("conversations")
@@ -51,6 +262,9 @@ export function setupSocket(io) {
             end: getUTC8Time(),
             triage: "agent",
             classification: "uncertain",
+            severity: "uncertain",
+            severity_conf: 0.25,
+            severity_reason: "Awaiting enough context to assess severity.",
           }])
           .select();
 
@@ -63,6 +277,11 @@ export function setupSocket(io) {
             callerSocketId: socket.id,
             operatorSocketId: null,
             takeoverActive: false,
+          });
+          io.emit("severity_update", {
+            conversationId: activeConversationId,
+            ...latestSeverity,
+            updatedAt: new Date().toISOString(),
           });
           console.log(`✅ [Socket ${socket.id}] Conversation created DB ID: ${activeConversationId}`);
         }
@@ -95,9 +314,11 @@ export function setupSocket(io) {
           },
         }));
         socket.emit("session_started");
+        startTriageLoop();
       });
 
       function handleTranscriptDone(role, audioBuffer, event) {
+        pushTriageTurn(role, event.transcript);
         socket.emit("history_updated", [{
           id: event.item_id || Date.now().toString(),
           role,
@@ -170,6 +391,7 @@ export function setupSocket(io) {
       openAiWs.on("close", () => {
         console.log(`[Socket ${socket.id}] OpenAI WebSocket closed`);
         socket.emit("session_stopped");
+        stopTriageLoop();
 
         if (activeConversationId) {
           io.to(activeConversationId).emit("operator_takeover_stopped", {
@@ -248,6 +470,7 @@ export function setupSocket(io) {
         openAiWs.close();
         openAiWs = null;
       }
+      stopTriageLoop();
     });
 
     // ------------------------------------------------------------------
@@ -378,6 +601,8 @@ export function setupSocket(io) {
         openAiWs.close();
         openAiWs = null;
       }
+
+      stopTriageLoop();
     });
   });
 }
