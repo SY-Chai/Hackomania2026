@@ -39,7 +39,7 @@ export interface UIConversation {
   id: string;
   pabId: string | null;
   phase: "triage" | "diagnosis";
-  classification: string | null;
+  // classification: string | null;
   severity: "urgent" | "uncertain" | "non_urgent" | null;
   severityConf: number | null;
   severityReason: string | null;
@@ -323,7 +323,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
             id: c.id,
             pabId: null,
             phase: normalizePhase(c.triage),
-            classification: c.classification,
+            // classification: c.classification,
             severity: c.severity,
             severityConf: c.severity_conf,
             severityReason: c.severity_reason,
@@ -344,7 +344,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
             ? {
               ...conv,
               phase: normalizePhase(c.triage),
-              classification: c.classification,
+              // classification: c.classification,
               severity: c.severity,
               severityConf: c.severity_conf,
               severityReason: c.severity_reason,
