@@ -1,9 +1,15 @@
 import type { DBConversation, DBMessage, DBPAB } from "./supabase";
-import type { UIConversation, UIMessage } from "@/components/dashboard/conversations-view";
+import type {
+  UIConversation,
+  UIMessage,
+} from "@/components/dashboard/conversations-view";
 import type { PABMarker } from "@/components/map/singapore-map";
 
 const CLOSED_STATUSES = new Set(["resolved", "closed", "completed", "done"]);
-export function deriveRole(userType: string | null | undefined): "senior" | "agent" | "human" {
+
+export function deriveRole(
+  userType: string | null | undefined,
+): "senior" | "agent" | "human" {
   if (!userType) return "senior";
   const t = userType.toLowerCase();
   if (t === "agent") return "agent";
@@ -16,24 +22,50 @@ export function normalizePhase(triage: string | null): "triage" | "diagnosis" {
   return "triage";
 }
 
-export function isOngoing(c: DBConversation): boolean {
-  return !c.classification || !CLOSED_STATUSES.has(c.classification.toLowerCase());
+/** Sort messages oldest-first by timestamp. Returns a new array. */
+export function sortMessages<T extends { timestamp: string }>(
+  messages: T[],
+): T[] {
+  return [...messages].sort((a, b) => {
+    const aTs = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+    const bTs = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+    return aTs - bTs;
+  });
 }
 
-export function toUIConversations(raw: (DBConversation & { messages: DBMessage[] })[]): UIConversation[] {
+export function isOngoing(c: DBConversation): boolean {
+  return (
+    !c.classification || !CLOSED_STATUSES.has(c.classification.toLowerCase())
+  );
+}
+
+export function toUIConversations(
+  raw: (DBConversation & { messages: DBMessage[] })[],
+): UIConversation[] {
   return raw.map((c) => {
-    const messages: UIMessage[] = c.messages.map((m) => {
-      const role = deriveRole(m.users?.type);
-      return {
-        id: m.id,
-        sender: role,
-        senderName: role === "agent" ? "AI Agent" : role === "human" ? "Operator" : "Senior",
-        content: m.content ?? "",
-        timestamp: m.timestamp ?? "",
-      };
-    });
-    const seniorMsg = c.messages.find((m) => deriveRole(m.users?.type) === "senior");
-    const lastMsg = messages[messages.length - 1];
+    const messages: UIMessage[] = sortMessages(
+      c.messages.map((m) => {
+        const role = deriveRole(m.users?.type);
+        return {
+          id: m.id,
+          sender: role,
+          senderName:
+            role === "agent"
+              ? "AI Agent"
+              : role === "human"
+                ? "Operator"
+                : "Senior",
+          content: m.content ?? "",
+          timestamp: m.timestamp ?? "",
+        };
+      }),
+    );
+
+    const seniorMsg = c.messages.find(
+      (m) => deriveRole(m.users?.type) === "senior",
+    );
+    const lastMsg = messages.at(-1);
+
     return {
       id: c.id,
       pabId: seniorMsg?.author_id ?? null,
@@ -49,17 +81,25 @@ export function toUIConversations(raw: (DBConversation & { messages: DBMessage[]
   });
 }
 
-export function toPABMarkers(pabs: DBPAB[], ongoingConversations: (DBConversation & { messages: DBMessage[] })[]): PABMarker[] {
+export function toPABMarkers(
+  pabs: DBPAB[],
+  ongoingConversations: (DBConversation & { messages: DBMessage[] })[],
+): PABMarker[] {
   const ongoingPabIds = new Set(
     ongoingConversations
       .map((c) => {
-        const userMsg = c.messages.find(m => deriveRole(m.users?.type) === "senior");
+        const userMsg = c.messages.find(
+          (m) => deriveRole(m.users?.type) === "senior",
+        );
         return userMsg ? userMsg.author_id : null;
       })
-      .filter((id): id is string => typeof id === "string")
+      .filter((id): id is string => typeof id === "string"),
   );
 
-  const validPABs = pabs.filter((p) => p.latitude != null && p.longitude != null);
+  const validPABs = pabs.filter(
+    (p) => p.latitude != null && p.longitude != null,
+  );
+
   return validPABs.map((p) => ({
     id: p.id,
     name: p.unit_no ?? p.id,

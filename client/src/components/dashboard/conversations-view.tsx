@@ -8,7 +8,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { resolveSocketServerUrl } from "@/lib/socket";
 import { type DBConversation, type DBMessage } from "@/lib/supabase";
-import { deriveRole, normalizePhase } from "@/lib/dashboard-utils";
+import {
+  deriveRole,
+  normalizePhase,
+  sortMessages,
+} from "@/lib/dashboard-utils";
 import { toPcm16, resampleTo24k, schedulePcm16Playback } from "@/lib/audio";
 import {
   MessageSquare,
@@ -403,7 +407,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 pabId:
                   !conv.pabId && role === "senior" ? m.author_id : conv.pabId,
                 lastActivity: m.timestamp ?? conv.lastActivity,
-                messages: [...conv.messages, newMsg],
+                messages: sortMessages([...conv.messages, newMsg]),
               }
             : conv,
         ),
@@ -944,7 +948,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
         <div className="flex-1 overflow-y-auto min-h-0 px-2 py-2">
           <div className="space-y-4 max-w-3xl">
-            {selected.messages.map((msg) => {
+            {sortMessages(selected.messages).map((msg) => {
               const cfg = senderConfig[msg.sender];
               const Icon = cfg.icon;
               const isRight = msg.sender === "senior";
