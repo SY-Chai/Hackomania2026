@@ -12,6 +12,7 @@ export interface DBConversation {
   timestamp: string | null;
   triage: string | null;
   classification: string | null;
+  pab_id?: string | null;
 }
 
 export interface DBMessage {
@@ -38,6 +39,15 @@ export interface DBElderly {
 }
 
 // --- Fetch helpers ---
+
+export async function fetchConversations(): Promise<DBConversation[]> {
+  const { data, error } = await supabase
+    .from("conversations")
+    .select("*")
+    .order("timestamp", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
 
 export async function fetchConversationsWithMessages(): Promise<(DBConversation & { messages: DBMessage[] })[]> {
   const { data: convs, error: convErr } = await supabase
@@ -70,9 +80,21 @@ export async function fetchConversationsWithMessages(): Promise<(DBConversation 
 }
 
 export async function fetchPABs(): Promise<DBPAB[]> {
-  const { data, error } = await supabase
-    .from("pabs")
-    .select("*");
-  if (error) throw error;
-  return data ?? [];
+  const pageSize = 1000;
+  let page = 0;
+  const all: DBPAB[] = [];
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("pabs")
+      .select("*")
+      .range(page * pageSize, (page + 1) * pageSize - 1);
+    if (error) throw error;
+    if (!data?.length) break;
+    all.push(...data);
+    if (data.length < pageSize) break;
+    page++;
+  }
+
+  return all;
 }
