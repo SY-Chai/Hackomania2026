@@ -3,6 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const { Server } = require('socket.io');
 const WebSocket = require('ws');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
@@ -38,14 +40,105 @@ if (supabaseUrl && supabaseKey) {
 }
 
 // Initialize Cloudflare R2 (S3 Client)
+const rawEndpoint = process.env.CLOUDFLARE_S3_API || '';
+const r2Bucket = 'hackomania-2026';
+// Strip bucket name from endpoint if present to avoid duplication in Key
+const r2Endpoint = rawEndpoint.endsWith(`/${r2Bucket}`) 
+  ? rawEndpoint.replace(`/${r2Bucket}`, '') 
+  : rawEndpoint;
+
 const r2Client = new S3Client({
   region: 'auto',
-  endpoint: process.env.CLOUDFLARE_S3_API,
+  endpoint: r2Endpoint,
   credentials: {
     accessKeyId: process.env.CLOUDFLARE_S3_ACCESS_KEY || '',
     secretAccessKey: process.env.CLOUDFLARE_S3_SECRET_ACCESS_KEY || '',
   },
 });
+
+// Audio Utilities
+function convertPCM16ToWAV(pcmBuffer, sampleRate = 24000) {
+  const numChannels = 1;
+  const byteRate = sampleRate * numChannels * 2;
+  const blockAlign = numChannels * 2;
+
+  const buffer = Buffer.alloc(44 + pcmBuffer.length);
+  
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(36 + pcmBuffer.length, 4);
+  buffer.write('WAVE', 8);
+  buffer.write('fmt ', 12);
+  buffer.writeUInt32LE(16, 16); // Subchunk1Size
+  buffer.writeUInt16LE(1, 20); // AudioFormat (PCM)
+  buffer.writeUInt16LE(numChannels, 22); // NumChannels
+  buffer.writeUInt32LE(sampleRate, 24); // SampleRate
+  buffer.writeUInt32LE(byteRate, 28); // ByteRate
+  buffer.writeUInt16LE(blockAlign, 32); // BlockAlign
+  buffer.writeUInt16LE(16, 34); // BitsPerSample
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(pcmBuffer.length, 40);
+  
+  pcmBuffer.copy(buffer, 44);
+  
+  return buffer;
+}
+
+// uploadToR2 helper
+async function uploadToR2(buffer, fileName, mimeType) {
+  const params = {
+    Bucket: 'hackomania-2026', // Your bucket
+    Key: fileName,
+    Body: buffer,
+    ContentType: mimeType,
+  };
+  const command = new PutObjectCommand(params);
+  await r2Client.send(command);
+  return `${process.env.CLOUDFLARE_PUBLIC_API}/${fileName}`;
+}
+
+// saveMessage helper
+async function saveMessage(conversationId, author, text) {
+  if (!supabase || !conversationId) return;
+
+  const row = {
+    conversation_id: conversationId,
+    author: author,
+    content: text || '',
+    timestamp: getUTC8Time()
+  };
+
+  const { data, error } = await supabase.from('messages').insert([row]).select();
+  
+  if (error) {
+    console.error('❌ Failed to save message to Supabase:', error);
+  } else {
+    // Supabase returns an array for select()
+    const savedId = data?.[0]?.id || 'unknown';
+    console.log(`✅ Saved ${author} message to Supabase DB ID: ${savedId}`);
+  }
+}
+
+// saveConversationAudio helper
+async function updateConversationAudio(conversationId, fileName) {
+  if (!supabase || !conversationId) return;
+  const { error } = await supabase.from('conversations').update({
+    audio_url: fileName
+  }).eq('id', conversationId);
+  
+  if (error) {
+    console.error('❌ Failed to update conversation audio_url:', error);
+  } else {
+    console.log(`✅ Updated conversation ${conversationId} audio_url: ${fileName}`);
+  }
+}
+
+// Helper for UTC+8 Timestamps
+function getUTC8Time() {
+  const now = new Date();
+  const utc8 = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  // Send as local time string matching the UTC+8 timezone
+  return utc8.toISOString().replace('Z', '+08:00');
+}
 
 // REST Endpoints
 app.get('/health', (req, res) => {
@@ -56,13 +149,13 @@ app.get('/health', (req, res) => {
 app.post('/api/conversations', async (req, res) => {
   if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
 
-  // Optional fields for triage (agent/operator) and classification (non-urgent/uncertain/urgent)
-  const { triage, classification, timestamp } = req.body || {};
+  const { start, end, triage, classification } = req.body || {};
 
   const { data, error } = await supabase
     .from('conversations') 
     .insert([{ 
-      timestamp: timestamp || new Date().toISOString(),
+      start: start || getUTC8Time(),
+      end: end || getUTC8Time(), // Initially setting start = end
       triage: triage || 'agent', // Default to agent if not provided
       classification: classification || 'uncertain' // Default to uncertain if not provided
     }])
@@ -100,20 +193,16 @@ app.patch('/api/conversations/:id', async (req, res) => {
 app.post('/api/messages', async (req, res) => {
   if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
 
-  // Match the keys with the Supabase `messages` schema from screenshot (`start`, `end`)
-  // Notice that the frontend might still send 'start_timestamp' so handle both just in case,
-  // but save to the DB matching the column exact names: `start` and `end`
-  const { conversation_id, author, content, start, end, start_timestamp, end_timestamp } = req.body;
+  const { conversation_id, author, content, timestamp } = req.body;
 
   const { data, error } = await supabase
     .from('messages') 
     .insert([
       {
-        conversation_id, // If your DB actually named this 'conversation_i', change this key safely. Looking at the screenshot, it says 'conversation_i' because it was truncated, but it is likely 'conversation_id'.
+        conversation_id,
         author,
         content,
-        start: start || start_timestamp || new Date().toISOString(),
-        end: end || end_timestamp
+        timestamp: timestamp || getUTC8Time()
       }
     ])
     .select();
@@ -126,12 +215,12 @@ app.post('/api/messages', async (req, res) => {
 app.get('/api/conversations/:id/messages', async (req, res) => {
   if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
 
-  const { id } = req.params;
+    const { id } = req.params;
   const { data, error } = await supabase
     .from('messages')
     .select('*')
     .eq('conversation_id', id)
-    .order('start', { ascending: true }); // using the 'start' column from the schema
+    .order('timestamp', { ascending: true }); // using the 'timestampz' column from the schema
 
   if (error) return res.status(400).json({ error: error.message });
   res.json(data);
@@ -145,7 +234,7 @@ app.post('/api/upload-audio', upload.single('audio'), async (req, res) => {
 
   try {
     const fileExtension = req.file.originalname.split('.').pop() || 'webm'; // Fallback to webm or wav depending on frontend
-    const fileName = `audio-${Date.now()}-${uuidv4()}.${fileExtension}`;
+    const fileName = `calls/audio-${Date.now()}-${uuidv4()}.${fileExtension}`;
     
     // We get the bucket name from the URL, but the AWS SDK usually expects it as a parameter.
     // Assuming your endpoint is configured correctly, we use a generic bucket name or extract it.
@@ -179,9 +268,20 @@ io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
   let openAiWs = null;
+  let activeConversationId = null;
+
+  // Audio buffering state
+  let assistantAudioBuffer = [];
+  let userAudioBuffer = [];
+  let rollingBuffer = [];
+  const MAX_ROLLING_CHUNKS = 20; // Keeps ~1.6 seconds of rolling historical context (4096 bytes per chunk)
+  let isRecordingUser = false;
+  
+  // Aggregate whole conversation audio
+  let fullConversationPcm = [];
 
   // Start an emergency voice session
-  socket.on('start_emergency_session', () => {
+  socket.on('start_emergency_session', async () => {
     if (openAiWs) {
       console.log(`[Socket ${socket.id}] WebSocket already exists.`);
       return;
@@ -194,6 +294,23 @@ io.on('connection', (socket) => {
 
     console.log(`[Socket ${socket.id}] Starting emergency session with OpenAI`);
     
+    // Auto-create a Supabase conversation on connection
+    if (supabase) {
+      const { data, error } = await supabase.from('conversations').insert([{
+        start: getUTC8Time(),
+        end: getUTC8Time(),
+        triage: 'agent',
+        classification: 'uncertain'
+      }]).select();
+
+      if (error) {
+        console.error(`❌ [Socket ${socket.id}] Failed to create conversation in DB:`, error);
+      } else if (data && data.length > 0) {
+        activeConversationId = data[0].id;
+        console.log(`✅ [Socket ${socket.id}] Conversation created DB ID: ${activeConversationId}`);
+      }
+    }
+
     // Connect to OpenAI Realtime API
     const url = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview';
     openAiWs = new WebSocket(url, {
@@ -252,6 +369,7 @@ Your goals:
             // Base64 decode to PCM16 ArrayBuffer
             if (event.delta) {
               const buffer = Buffer.from(event.delta, 'base64');
+              assistantAudioBuffer.push(buffer);
               socket.emit('server_audio', buffer);
             }
             break;
@@ -259,9 +377,20 @@ Your goals:
           case 'response.audio_transcript.done':
             socket.emit('history_updated', [{
               id: event.item_id || Date.now().toString(),
-              role: 'assistant',
+              role: 'agent',
               text: event.transcript
             }]);
+
+            // Save Agent Message & Add Audio to aggregate
+            if (activeConversationId) {
+              const fullPcmBuffer = Buffer.concat(assistantAudioBuffer);
+              assistantAudioBuffer = []; // reset for next response
+              
+              if (fullPcmBuffer.length > 0) {
+                fullConversationPcm.push(fullPcmBuffer);
+              }
+              saveMessage(activeConversationId, 'agent', event.transcript);
+            }
             break;
 
           case 'conversation.item.input_audio_transcription.completed':
@@ -270,6 +399,17 @@ Your goals:
               role: 'user',
               text: event.transcript
             }]);
+
+            // Save User Message & Add Audio to aggregate
+            if (activeConversationId) {
+              const fullPcmBuffer = Buffer.concat(userAudioBuffer);
+              userAudioBuffer = []; // clear context
+              
+              if (fullPcmBuffer.length > 0) {
+                fullConversationPcm.push(fullPcmBuffer);
+              }
+              saveMessage(activeConversationId, 'user', event.transcript);
+            }
             break;
 
           case 'error':
@@ -279,10 +419,15 @@ Your goals:
             
           case 'input_audio_buffer.speech_started':
             socket.emit('status_update', 'Listening...');
+            isRecordingUser = true;
+            // Provide rolling audio context backward 1.6s so we don't clip prefixes
+            userAudioBuffer = [...rollingBuffer]; 
+            rollingBuffer = [];
             break;
 
           case 'input_audio_buffer.speech_stopped':
             socket.emit('status_update', 'Processing...');
+            isRecordingUser = false;
             break;
         }
       } catch (err) {
@@ -293,6 +438,25 @@ Your goals:
     openAiWs.on('close', () => {
       console.log(`[Socket ${socket.id}] OpenAI WebSocket closed`);
       socket.emit('session_stopped');
+
+      // Add actual end time to the conversation when socket closes
+      if (activeConversationId) {
+        supabase.from('conversations').update({ end: getUTC8Time() }).eq('id', activeConversationId)
+          .then(() => console.log(`[Socket ${socket.id}] Logged end time for conversation ${activeConversationId}`))
+          .catch(err => console.error("Error logging end time:", err));
+
+        // Aggregate and upload the complete conversation audio recording
+        if (fullConversationPcm.length > 0) {
+          const finalPcm = Buffer.concat(fullConversationPcm);
+          const wavBuffer = convertPCM16ToWAV(finalPcm, 24000);
+          const fileName = `calls/conversation-${activeConversationId}.wav`;
+          
+          uploadToR2(wavBuffer, fileName, 'audio/wav')
+            .then(() => updateConversationAudio(activeConversationId, fileName))
+            .catch(err => console.error('Error uploading complete conversation tracking:', err));
+        }
+      }
+
       openAiWs = null;
     });
 
@@ -306,7 +470,8 @@ Your goals:
   socket.on('client_audio', (pcm16Buffer) => {
     if (openAiWs && openAiWs.readyState === WebSocket.OPEN) {
       // Encode ArrayBuffer to base64
-      const base64Audio = Buffer.from(pcm16Buffer).toString('base64');
+      const buf = Buffer.from(pcm16Buffer);
+      const base64Audio = buf.toString('base64');
       
       const audioEvent = {
         type: 'input_audio_buffer.append',
@@ -314,6 +479,16 @@ Your goals:
       };
 
       openAiWs.send(JSON.stringify(audioEvent));
+
+      // Stream buffering
+      if (isRecordingUser) {
+        userAudioBuffer.push(buf);
+      } else {
+        rollingBuffer.push(buf);
+        if (rollingBuffer.length > MAX_ROLLING_CHUNKS) {
+          rollingBuffer.shift();
+        }
+      }
     }
   });
 

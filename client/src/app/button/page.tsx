@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 
 type ChatMessage = {
   id: string;
-  role: "user" | "assistant" | "system";
+  role: "pab" | "user" | "operator" | "agent" | "system";
   text: string;
 };
 
@@ -321,7 +321,7 @@ export default function Page() {
           <div className="flex-1 space-y-4 overflow-y-auto px-6 py-6">
             {messages.map((message) => {
               const isUser = message.role === "user";
-              const isAssistant = message.role === "assistant";
+              const isAgent = message.role === "agent";
 
               return (
                 <div
@@ -337,7 +337,7 @@ export default function Page() {
                     className={`mb-1 text-xs font-medium uppercase tracking-wide ${isUser ? "text-slate-400" : "text-slate-400"
                       }`}
                   >
-                    {isUser ? "Senior" : isAssistant ? "AI Responder" : "System"}
+                    {isUser ? "User" : isAgent ? "AI Agent" : "System"}
                   </div>
                   <div>{message.text}</div>
                 </div>
