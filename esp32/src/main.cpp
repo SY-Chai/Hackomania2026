@@ -300,6 +300,7 @@ void onWsEvent(WStype_t type, uint8_t *payload, size_t length)
     Serial.printf("[WS] Text: %s\n", payload);
     break;
   default:
+    Serial.printf("[WS] Unhandled type: %d, length: %d\n", type, length);
     break;
   }
 }
