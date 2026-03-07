@@ -42,23 +42,52 @@ export interface UIConversation {
 // --- Config ---
 
 const phaseConfig = {
-  triage: { label: "Triage", className: "bg-slate-100 text-slate-700 border-slate-200" },
-  diagnosis: { label: "Diagnosis", className: "bg-slate-800 text-white border-slate-800" },
+  triage: {
+    label: "Triage",
+    className: "bg-slate-100 text-slate-700 border-slate-200",
+  },
+  diagnosis: {
+    label: "Diagnosis",
+    className: "bg-slate-800 text-white border-slate-800",
+  },
 };
 
 const senderConfig = {
-  senior: { icon: User, bg: "bg-slate-200", text: "text-slate-700", label: "Senior" },
-  agent: { icon: Bot, bg: "bg-slate-100", text: "text-slate-500", label: "AI Agent" },
-  human: { icon: Stethoscope, bg: "bg-slate-100", text: "text-slate-500", label: "Staff" },
+  senior: {
+    icon: User,
+    bg: "bg-slate-200",
+    text: "text-slate-700",
+    label: "Senior",
+  },
+  agent: {
+    icon: Bot,
+    bg: "bg-slate-100",
+    text: "text-slate-500",
+    label: "AI Agent",
+  },
+  human: {
+    icon: Stethoscope,
+    bg: "bg-slate-100",
+    text: "text-slate-500",
+    label: "Staff",
+  },
 };
 
 function formatTime(iso: string | null | undefined) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString("en-SG", { hour: "2-digit", minute: "2-digit" });
+  return new Date(iso).toLocaleTimeString("en-SG", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function getInitials(name: string) {
-  return name.split(" ").slice(-2).map((n) => n[0]).join("").toUpperCase();
+  return name
+    .split(" ")
+    .slice(-2)
+    .map((n) => n[0])
+    .join("")
+    .toUpperCase();
 }
 
 type FilterTab = "all" | "triage" | "diagnosis";
@@ -98,7 +127,9 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const playbackAudioContextRef = useRef<AudioContext | null>(null);
   const nextPlaybackTimeRef = useRef(0);
   const selected =
-    conversations.find((conv) => conv.id === selectedId) ?? conversations[0] ?? null;
+    conversations.find((conv) => conv.id === selectedId) ??
+    conversations[0] ??
+    null;
 
   const schedulePcm16Playback = useCallback((pcmChunk: Int16Array) => {
     const ctx = playbackAudioContextRef.current;
@@ -210,8 +241,16 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
   const tabs: { key: FilterTab; label: string; count: number }[] = [
     { key: "all", label: "All", count: conversations.length },
-    { key: "triage", label: "Triage", count: conversations.filter((c) => c.phase === "triage").length },
-    { key: "diagnosis", label: "Diagnosis", count: conversations.filter((c) => c.phase === "diagnosis").length },
+    {
+      key: "triage",
+      label: "Triage",
+      count: conversations.filter((c) => c.phase === "triage").length,
+    },
+    {
+      key: "diagnosis",
+      label: "Diagnosis",
+      count: conversations.filter((c) => c.phase === "diagnosis").length,
+    },
   ];
 
   // Derive a display name from the first non-agent message author
@@ -229,13 +268,17 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   }
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full min-h-0 overflow-hidden">
       {/* Left panel */}
-      <div className="flex flex-col w-80 bg-white border-r border-slate-200 shrink-0">
+      <div className="flex flex-col w-80 bg-white border-r border-slate-200 shrink-0 h-full min-h-0">
         <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-slate-100">
           <div>
-            <h1 className="text-sm font-semibold text-slate-900">Conversations</h1>
-            <p className="text-xs text-slate-500 mt-0.5">{conversations.length} total</p>
+            <h1 className="text-sm font-semibold text-slate-900">
+              Conversations
+            </h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {conversations.length} total
+            </p>
           </div>
           {onCollapse && (
             <button
@@ -256,21 +299,25 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 "flex items-center gap-1.5 px-1 py-3 text-xs font-medium border-b-2 mr-4 transition-colors",
                 filter === key
                   ? "border-slate-900 text-slate-900"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
+                  : "border-transparent text-slate-500 hover:text-slate-700",
               )}
             >
               {label}
-              <span className={cn(
-                "text-[10px] font-semibold px-1.5 py-0.5 rounded",
-                filter === key ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"
-              )}>
+              <span
+                className={cn(
+                  "text-[10px] font-semibold px-1.5 py-0.5 rounded",
+                  filter === key
+                    ? "bg-slate-900 text-white"
+                    : "bg-slate-100 text-slate-500",
+                )}
+              >
                 {count}
               </span>
             </button>
           ))}
         </div>
 
-        <ScrollArea className="flex-1">
+        <div className="flex-1 overflow-y-auto min-h-0">
           <div className="py-2">
             {filtered.map((conv) => {
               const displayName = getDisplayName(conv);
@@ -289,7 +336,9 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                   }}
                   className={cn(
                     "w-full text-left px-4 py-3 transition-colors border-b border-slate-50 last:border-0",
-                    selected.id === conv.id ? "bg-slate-50" : "hover:bg-slate-50/60"
+                    selected.id === conv.id
+                      ? "bg-slate-50"
+                      : "hover:bg-slate-50/60",
                   )}
                 >
                   <div className="flex items-start gap-3">
@@ -300,11 +349,20 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                     </Avatar>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2 mb-1">
-                        <p className="text-xs font-semibold text-slate-900 truncate">{displayName}</p>
-                        <span className="text-[10px] text-slate-400 shrink-0">{formatTime(conv.lastActivity)}</span>
+                        <p className="text-xs font-semibold text-slate-900 truncate">
+                          {displayName}
+                        </p>
+                        <span className="text-[10px] text-slate-400 shrink-0">
+                          {formatTime(conv.lastActivity)}
+                        </span>
                       </div>
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className={cn("text-[10px] font-medium px-1.5 py-0.5 rounded border", phaseConfig[conv.phase].className)}>
+                        <span
+                          className={cn(
+                            "text-[10px] font-medium px-1.5 py-0.5 rounded border",
+                            phaseConfig[conv.phase].className,
+                          )}
+                        >
                           {phaseConfig[conv.phase].label}
                         </span>
                         {conv.classification && (
@@ -314,7 +372,9 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                         )}
                       </div>
                       {lastMsg && (
-                        <p className="text-xs text-slate-400 mt-1 truncate">{lastMsg.content}</p>
+                        <p className="text-xs text-slate-400 mt-1 truncate">
+                          {lastMsg.content}
+                        </p>
                       )}
                     </div>
                   </div>
@@ -322,11 +382,11 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               );
             })}
           </div>
-        </ScrollArea>
+        </div>
       </div>
 
       {/* Right panel */}
-      <div className="flex flex-col flex-1 min-w-0">
+      <div className="flex flex-col flex-1 min-w-0 min-h-0">
         <div className="flex items-start justify-between px-6 py-4 bg-white border-b border-slate-200 gap-4">
           <div className="flex items-center gap-3">
             <Avatar className="w-10 h-10">
@@ -335,17 +395,22 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               </AvatarFallback>
             </Avatar>
             <div>
-              <h2 className="text-sm font-semibold text-slate-900">{getDisplayName(selected)}</h2>
+              <h2 className="text-sm font-semibold text-slate-900">
+                {getDisplayName(selected)}
+              </h2>
               <div className="flex items-center gap-2 mt-0.5">
                 <span className="flex items-center gap-1 text-xs text-slate-500">
-                  <MapPin className="w-3 h-3" />ID: {selected.id.slice(0, 8)}…
+                  <MapPin className="w-3 h-3" />
+                  ID: {selected.id.slice(0, 8)}…
                 </span>
               </div>
             </div>
           </div>
           <div className="flex flex-col items-end gap-2 shrink-0">
             <Button
-              variant={listenTargetId === selected.id ? "destructive" : "outline"}
+              variant={
+                listenTargetId === selected.id ? "destructive" : "outline"
+              }
               size="sm"
               onClick={() => {
                 if (listenTargetId === selected.id) {
@@ -381,7 +446,12 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               )}
             </Button>
             <div className="flex items-center gap-2">
-              <span className={cn("text-xs font-medium px-2.5 py-1 rounded border", phaseConfig[selected.phase].className)}>
+              <span
+                className={cn(
+                  "text-xs font-medium px-2.5 py-1 rounded border",
+                  phaseConfig[selected.phase].className,
+                )}
+              >
                 {phaseConfig[selected.phase].label} phase
               </span>
               {selected.classification && (
@@ -423,7 +493,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
           )}
         </div>
 
-        <ScrollArea className="flex-1 px-6 py-4">
+        <div className="flex-1 overflow-y-auto min-h-0 px-2 py-2">
           <div className="space-y-4 max-w-3xl">
             {selected.messages.map((msg) => {
               const cfg = senderConfig[msg.sender];
@@ -431,26 +501,45 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               const isRight = msg.sender === "senior";
 
               return (
-                <div key={msg.id} className={cn("flex gap-3", isRight && "flex-row-reverse")}>
-                  <div className={cn("flex items-center justify-center w-7 h-7 rounded-full shrink-0 mt-0.5", cfg.bg)}>
+                <div
+                  key={msg.id}
+                  className={cn("flex gap-3", isRight && "flex-row-reverse")}
+                >
+                  <div
+                    className={cn(
+                      "flex items-center justify-center w-7 h-7 rounded-full shrink-0 mt-0.5",
+                      cfg.bg,
+                    )}
+                  >
                     <Icon className={cn("w-3.5 h-3.5", cfg.text)} />
                   </div>
-                  <div className={cn("flex flex-col max-w-sm", isRight && "items-end")}>
+                  <div
+                    className={cn(
+                      "flex flex-col max-w-sm",
+                      isRight && "items-end",
+                    )}
+                  >
                     <div className="flex items-center gap-1.5 mb-1">
-                      <span className="text-[10px] font-semibold text-slate-500">{msg.senderName}</span>
+                      <span className="text-[10px] font-semibold text-slate-500">
+                        {msg.senderName}
+                      </span>
                       <span className="text-[9px] px-1 rounded text-slate-400 border border-slate-200 bg-white">
                         {cfg.label}
                       </span>
-                      <span className="text-[10px] text-slate-400">{formatTime(msg.timestamp)}</span>
+                      <span className="text-[10px] text-slate-400">
+                        {formatTime(msg.timestamp)}
+                      </span>
                     </div>
-                    <div className={cn(
-                      "px-3.5 py-2.5 rounded text-sm leading-relaxed",
-                      msg.sender === "senior"
-                        ? "bg-slate-900 text-white"
-                        : msg.sender === "agent"
-                        ? "bg-slate-100 text-slate-800 border border-slate-200"
-                        : "bg-white text-slate-800 border border-slate-200"
-                    )}>
+                    <div
+                      className={cn(
+                        "px-2 py-1 rounded-xl text-xs leading-relaxed",
+                        msg.sender === "senior"
+                          ? "bg-slate-900 text-white"
+                          : msg.sender === "agent"
+                            ? "bg-slate-100 text-slate-800 border border-slate-200"
+                            : "bg-white text-slate-800 border border-slate-200",
+                      )}
+                    >
                       {msg.content}
                     </div>
                   </div>
@@ -458,7 +547,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               );
             })}
           </div>
-        </ScrollArea>
+        </div>
       </div>
     </div>
   );

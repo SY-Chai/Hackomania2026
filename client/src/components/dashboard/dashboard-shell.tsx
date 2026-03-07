@@ -20,7 +20,7 @@ const STATS = (stationary: number, ongoing: number) => [
   { label: "Wearables", value: 0, Icon: Users },
 ];
 
-const DEFAULT_WIDTH = 560;
+const DEFAULT_WIDTH = 700;
 const MIN_WIDTH = 280;
 const COLLAPSE_THRESHOLD = 120;
 
