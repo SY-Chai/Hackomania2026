@@ -4,7 +4,8 @@ import { getUTC8Time, uploadToR2, convertPCM16ToWAV } from "./utils.js";
 import { saveMessage, updateConversationAudio } from "./db.js";
 import { ASSISTANT_PROMPT } from "./prompt.js";
 
-const OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview";
+const OPENAI_REALTIME_URL =
+  "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview";
 const MAX_ROLLING_CHUNKS = 20; // ~1.6 seconds of rolling historical context (4096 bytes per chunk)
 const MAX_CONVERSATION_PCM_BYTES = 50 * 1024 * 1024; // 50 MB cap per call
 const TRIAGE_INTERVAL_MS = Number(process.env.SEVERITY_REEVAL_MS || 10000);
@@ -15,9 +16,12 @@ const TRIAGE_MAX_TURNS = 12;
 // ------------------------------------------------------------------
 
 function normalizeSeverity(value) {
-  const normalized = String(value || "").trim().toLowerCase();
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
   if (normalized === "urgent") return "urgent";
-  if (normalized === "non_urgent" || normalized === "not_urgent") return "non_urgent";
+  if (normalized === "non_urgent" || normalized === "not_urgent")
+    return "non_urgent";
   return "uncertain";
 }
 
@@ -58,8 +62,8 @@ async function assessConversationSeverity(turns) {
             "Compute weighted_risk = 0.35*life_threat + 0.25*instability + 0.15*injury_mechanism + 0.10*vulnerability + 0.15*(5-reliability).",
             "Then divide weighted_risk by 5 to get risk_0_to_1.",
             "Severity decision rules:",
-            '- urgent: life_threat >= 4 OR instability >= 4 OR risk_0_to_1 >= 0.72.',
-            '- non_urgent: risk_0_to_1 <= 0.35 AND life_threat <= 1 AND instability <= 1.',
+            "- urgent: life_threat >= 4 OR instability >= 4 OR risk_0_to_1 >= 0.72.",
+            "- non_urgent: risk_0_to_1 <= 0.35 AND life_threat <= 1 AND instability <= 1.",
             "- uncertain: all other cases, including conflicting or sparse information.",
             "Confidence calibration rules:",
             "- Build confidence from signal strength, evidence consistency, and reliability.",
@@ -103,7 +107,10 @@ async function assessConversationSeverity(turns) {
             type: "object",
             additionalProperties: false,
             properties: {
-              severity: { type: "string", enum: ["urgent", "uncertain", "non_urgent"] },
+              severity: {
+                type: "string",
+                enum: ["urgent", "uncertain", "non_urgent"],
+              },
               severity_conf: { type: "number", minimum: 0, maximum: 1 },
               severity_reason: { type: "string", minLength: 1, maxLength: 240 },
               rubric_scores: {
@@ -141,7 +148,9 @@ async function assessConversationSeverity(turns) {
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Severity model request failed (${response.status}): ${body || "empty body"}`);
+    throw new Error(
+      `Severity model request failed (${response.status}): ${body || "empty body"}`,
+    );
   }
 
   const payload = await response.json();
@@ -152,7 +161,9 @@ async function assessConversationSeverity(turns) {
   return {
     severity: normalizeSeverity(parsed?.severity),
     severity_conf: normalizeConfidence(parsed?.severity_conf),
-    severity_reason: String(parsed?.severity_reason || "No rationale provided."),
+    severity_reason: String(
+      parsed?.severity_reason || "No rationale provided.",
+    ),
   };
 }
 
@@ -190,7 +201,9 @@ export function setupSocket(io) {
       severity_reason: "Awaiting enough context to assess severity.",
     };
 
-    const queueTriage = () => { triageDirty = true; };
+    const queueTriage = () => {
+      triageDirty = true;
+    };
 
     const pushTriageTurn = (role, text) => {
       const cleaned = String(text || "").trim();
@@ -242,7 +255,10 @@ export function setupSocket(io) {
           .eq("id", activeConversationId);
 
         if (error) {
-          console.error(`❌ Failed to persist severity for ${activeConversationId}:`, error);
+          console.error(
+            `❌ Failed to persist severity for ${activeConversationId}:`,
+            error,
+          );
         } else {
           notifyDashboard();
         }
@@ -259,7 +275,10 @@ export function setupSocket(io) {
 
     const runTriage = async () => {
       if (!triageDirty || !triageTurns.length || !activeConversationId) return;
-      if (triageInFlight) { triageQueued = true; return; }
+      if (triageInFlight) {
+        triageQueued = true;
+        return;
+      }
 
       triageInFlight = true;
       triageDirty = false;
@@ -272,7 +291,10 @@ export function setupSocket(io) {
         console.error(`[Socket ${socket.id}] Severity triage failed:`, err);
       } finally {
         triageInFlight = false;
-        if (triageQueued) { triageQueued = false; queueTriage(); }
+        if (triageQueued) {
+          triageQueued = false;
+          queueTriage();
+        }
       }
     };
 
@@ -303,7 +325,7 @@ export function setupSocket(io) {
         const { data: agentData, error: agentErr } = await supabase
           .from("users")
           .select("id")
-          .eq("author_type", "agent")
+          .eq("type", "agent")
           .limit(1)
           .single();
         if (agentErr) console.error(`❌ Failed to fetch agent user:`, agentErr);
@@ -316,28 +338,38 @@ export function setupSocket(io) {
       }
 
       if (!process.env.OPENAI_API_KEY) {
-        socket.emit("session_error", "OPENAI_API_KEY is missing on the server.");
+        socket.emit(
+          "session_error",
+          "OPENAI_API_KEY is missing on the server.",
+        );
         return;
       }
 
-      console.log(`[Socket ${socket.id}] Starting emergency session with OpenAI. PAB ID: ${pabId}`);
+      console.log(
+        `[Socket ${socket.id}] Starting emergency session with OpenAI. PAB ID: ${pabId}`,
+      );
 
       if (supabase) {
         const { data: dbData, error } = await supabase
           .from("conversations")
-          .insert([{
-            start: getUTC8Time(),
-            end: getUTC8Time(),
-            triage: "agent",
-            classification: "uncertain",
-            severity: "uncertain",
-            severity_conf: 25,
-            severity_reason: "Awaiting enough context to assess severity.",
-          }])
+          .insert([
+            {
+              start: getUTC8Time(),
+              end: getUTC8Time(),
+              triage: "agent",
+              classification: "uncertain",
+              severity: "uncertain",
+              severity_conf: 25,
+              severity_reason: "Awaiting enough context to assess severity.",
+            },
+          ])
           .select();
 
         if (error) {
-          console.error(`❌ [Socket ${socket.id}] Failed to create conversation:`, error);
+          console.error(
+            `❌ [Socket ${socket.id}] Failed to create conversation:`,
+            error,
+          );
         } else if (dbData?.length > 0) {
           activeConversationId = dbData[0].id;
           socket.join(activeConversationId);
@@ -345,14 +377,16 @@ export function setupSocket(io) {
             callerSocketId: socket.id,
             operatorSocketId: null,
             takeoverActive: false,
-            pabId: pabId // Store it in session map
+            pabId: pabId, // Store it in session map
           });
           io.emit("severity_update", {
             conversationId: activeConversationId,
             ...latestSeverity,
             updatedAt: new Date().toISOString(),
           });
-          console.log(`✅ [Socket ${socket.id}] Conversation created DB ID: ${activeConversationId}`);
+          console.log(
+            `✅ [Socket ${socket.id}] Conversation created DB ID: ${activeConversationId}`,
+          );
         }
       }
 
@@ -365,41 +399,48 @@ export function setupSocket(io) {
 
       openAiWs.on("open", () => {
         console.log(`[Socket ${socket.id}] Connected to OpenAI Realtime API`);
-        openAiWs.send(JSON.stringify({
-          type: "session.update",
-          session: {
-            modalities: ["audio", "text"],
-            instructions: ASSISTANT_PROMPT.trim(),
-            voice: "sage",
-            input_audio_format: "pcm16",
-            output_audio_format: "pcm16",
-            input_audio_transcription: { model: "whisper-1" },
-            turn_detection: {
-              type: "server_vad",
-              threshold: 0.65,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 1000,
+        openAiWs.send(
+          JSON.stringify({
+            type: "session.update",
+            session: {
+              modalities: ["audio", "text"],
+              instructions: ASSISTANT_PROMPT.trim(),
+              voice: "sage",
+              input_audio_format: "pcm16",
+              output_audio_format: "pcm16",
+              input_audio_transcription: { model: "whisper-1" },
+              turn_detection: {
+                type: "server_vad",
+                threshold: 0.65,
+                prefix_padding_ms: 300,
+                silence_duration_ms: 1000,
+              },
             },
-          },
-        }));
+          }),
+        );
         socket.emit("session_started");
         startTriageLoop();
       });
 
       function handleTranscriptDone(role, audioBuffer, event) {
         pushTriageTurn(role, event.transcript);
-        socket.emit("history_updated", [{
-          id: event.item_id || Date.now().toString(),
-          role,
-          text: event.transcript,
-        }]);
+        socket.emit("history_updated", [
+          {
+            id: event.item_id || Date.now().toString(),
+            role,
+            text: event.transcript,
+          },
+        ]);
         if (activeConversationId) {
           const fullPcmBuffer = Buffer.concat(audioBuffer);
-          if (fullPcmBuffer.length > 0 && fullConversationPcmBytes < MAX_CONVERSATION_PCM_BYTES) {
+          if (
+            fullPcmBuffer.length > 0 &&
+            fullConversationPcmBytes < MAX_CONVERSATION_PCM_BYTES
+          ) {
             fullConversationPcm.push(fullPcmBuffer);
             fullConversationPcmBytes += fullPcmBuffer.length;
           }
-          
+
           let authorIdToSave = null;
           if (role === "agent") {
             authorIdToSave = agentUserId;
@@ -407,8 +448,13 @@ export function setupSocket(io) {
             const session = liveConversationSessions.get(activeConversationId);
             authorIdToSave = session?.pabId || null;
           }
-           
-          saveMessage(activeConversationId, authorIdToSave, event.transcript, notifyDashboard);
+
+          saveMessage(
+            activeConversationId,
+            authorIdToSave,
+            event.transcript,
+            notifyDashboard,
+          );
         }
       }
 
@@ -421,7 +467,8 @@ export function setupSocket(io) {
               if (event.delta) {
                 const isOperatorTakeover = !!(
                   activeConversationId &&
-                  liveConversationSessions.get(activeConversationId)?.takeoverActive
+                  liveConversationSessions.get(activeConversationId)
+                    ?.takeoverActive
                 );
                 if (isOperatorTakeover) break;
 
@@ -429,7 +476,9 @@ export function setupSocket(io) {
                 assistantAudioBuffer.push(buffer);
                 socket.emit("server_audio", buffer);
                 if (activeConversationId) {
-                  socket.to(activeConversationId).emit("conversation_audio", "agent", buffer);
+                  socket
+                    .to(activeConversationId)
+                    .emit("conversation_audio", "agent", buffer);
                 }
               }
               break;
@@ -446,7 +495,10 @@ export function setupSocket(io) {
 
             case "error":
               console.error(`[Socket ${socket.id}] OpenAI error:`, event.error);
-              socket.emit("session_error", event.error?.message || "Unknown OpenAI error");
+              socket.emit(
+                "session_error",
+                event.error?.message || "Unknown OpenAI error",
+              );
               break;
 
             case "input_audio_buffer.speech_started":
@@ -483,7 +535,9 @@ export function setupSocket(io) {
               .update({ end: getUTC8Time() })
               .eq("id", activeConversationId)
               .then(() => {
-                console.log(`[Socket ${socket.id}] Logged end time for conversation ${activeConversationId}`);
+                console.log(
+                  `[Socket ${socket.id}] Logged end time for conversation ${activeConversationId}`,
+                );
                 notifyDashboard();
               })
               .catch((err) => console.error("Error logging end time:", err));
@@ -495,8 +549,16 @@ export function setupSocket(io) {
             const fileName = `calls/conversation-${activeConversationId}.wav`;
 
             uploadToR2(wavBuffer, fileName, "audio/wav")
-              .then(() => updateConversationAudio(activeConversationId, fileName, notifyDashboard))
-              .catch((err) => console.error("Error uploading conversation audio:", err));
+              .then(() =>
+                updateConversationAudio(
+                  activeConversationId,
+                  fileName,
+                  notifyDashboard,
+                ),
+              )
+              .catch((err) =>
+                console.error("Error uploading conversation audio:", err),
+              );
           }
         }
 
@@ -519,22 +581,33 @@ export function setupSocket(io) {
       const session = activeConversationId
         ? liveConversationSessions.get(activeConversationId)
         : null;
-      const isOperatorTakeover = !!(session?.takeoverActive && session?.operatorSocketId);
+      const isOperatorTakeover = !!(
+        session?.takeoverActive && session?.operatorSocketId
+      );
       const buf = Buffer.from(pcm16Buffer);
 
       if (isOperatorTakeover) {
         if (activeConversationId) {
-          socket.to(activeConversationId).emit("conversation_audio", "user", buf);
+          socket
+            .to(activeConversationId)
+            .emit("conversation_audio", "user", buf);
         }
         return;
       }
 
-      openAiWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: buf.toString("base64") }));
+      openAiWs.send(
+        JSON.stringify({
+          type: "input_audio_buffer.append",
+          audio: buf.toString("base64"),
+        }),
+      );
 
       if (isRecordingUser) {
         userAudioBuffer.push(buf);
         if (activeConversationId) {
-          socket.to(activeConversationId).emit("conversation_audio", "user", buf);
+          socket
+            .to(activeConversationId)
+            .emit("conversation_audio", "user", buf);
         }
       } else {
         rollingBuffer.push(buf);
@@ -568,7 +641,10 @@ export function setupSocket(io) {
       }
 
       if (session.operatorSocketId && session.operatorSocketId !== socket.id) {
-        socket.emit("operator_takeover_error", "Another operator is already handling this call.");
+        socket.emit(
+          "operator_takeover_error",
+          "Another operator is already handling this call.",
+        );
         return;
       }
 
@@ -583,9 +659,14 @@ export function setupSocket(io) {
           .eq("id", conversationId);
 
         if (error) {
-          console.error(`❌ Failed to update triage=operator for ${conversationId}:`, error);
+          console.error(
+            `❌ Failed to update triage=operator for ${conversationId}:`,
+            error,
+          );
         } else {
-          console.log(`✅ Conversation ${conversationId} triage updated to operator`);
+          console.log(
+            `✅ Conversation ${conversationId} triage updated to operator`,
+          );
           notifyDashboard();
         }
       }
@@ -594,7 +675,10 @@ export function setupSocket(io) {
         conversationId,
         operatorSocketId: socket.id,
       });
-      io.to(session.callerSocketId).emit("status_update", "Operator joined the call");
+      io.to(session.callerSocketId).emit(
+        "status_update",
+        "Operator joined the call",
+      );
     });
 
     socket.on("operator_audio", (payload) => {
@@ -603,7 +687,8 @@ export function setupSocket(io) {
 
       const session = liveConversationSessions.get(conversationId);
       if (!session?.callerSocketId) return;
-      if (!session.takeoverActive || session.operatorSocketId !== socket.id) return;
+      if (!session.takeoverActive || session.operatorSocketId !== socket.id)
+        return;
 
       const buf = Buffer.from(audio);
       io.to(session.callerSocketId).emit("server_audio", buf);
@@ -622,9 +707,14 @@ export function setupSocket(io) {
       session.operatorSocketId = null;
       session.takeoverActive = false;
 
-      io.to(conversationId).emit("operator_takeover_stopped", { conversationId });
+      io.to(conversationId).emit("operator_takeover_stopped", {
+        conversationId,
+      });
       if (session.callerSocketId) {
-        io.to(session.callerSocketId).emit("status_update", "AI assistant resumed");
+        io.to(session.callerSocketId).emit(
+          "status_update",
+          "AI assistant resumed",
+        );
       }
     });
 
@@ -657,13 +747,21 @@ export function setupSocket(io) {
     socket.on("disconnect", () => {
       console.log("Client disconnected:", socket.id);
 
-      for (const [conversationId, session] of liveConversationSessions.entries()) {
+      for (const [
+        conversationId,
+        session,
+      ] of liveConversationSessions.entries()) {
         if (session.operatorSocketId === socket.id) {
           session.operatorSocketId = null;
           session.takeoverActive = false;
-          io.to(conversationId).emit("operator_takeover_stopped", { conversationId });
+          io.to(conversationId).emit("operator_takeover_stopped", {
+            conversationId,
+          });
           if (session.callerSocketId) {
-            io.to(session.callerSocketId).emit("status_update", "AI assistant resumed");
+            io.to(session.callerSocketId).emit(
+              "status_update",
+              "AI assistant resumed",
+            );
           }
         }
       }
