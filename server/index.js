@@ -25,6 +25,8 @@ const io = new Server(server, {
 // operatorSocketId: operator socket that took over the call (if any)
 // takeoverActive: whether AI responses are paused in favor of operator audio
 const liveConversationSessions = new Map();
+const TRIAGE_INTERVAL_MS = Number(process.env.SEVERITY_REEVAL_MS || 10000);
+const TRIAGE_MAX_TURNS = 12;
 
 // Middleware
 app.use(cors());
@@ -157,6 +159,107 @@ function getUTC8Time() {
   const utc8 = new Date(now.getTime() + 8 * 60 * 60 * 1000);
   // Send as local time string matching the UTC+8 timezone
   return utc8.toISOString().replace("Z", "+08:00");
+}
+
+function normalizeSeverity(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+
+  if (normalized === "urgent") return "urgent";
+  if (normalized === "non_urgent" || normalized === "not_urgent") {
+    return "non_urgent";
+  }
+  return "uncertain";
+}
+
+function normalizeConfidence(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0.5;
+  return Math.max(0, Math.min(1, num));
+}
+
+async function assessConversationSeverity(turns) {
+  if (!process.env.OPENAI_API_KEY || !turns.length) return null;
+
+  const transcript = turns
+    .map((turn) => `${turn.role.toUpperCase()}: ${turn.text}`)
+    .join("\n");
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: process.env.SEVERITY_MODEL || "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a medical triage assistant for emergency elder-care calls. Output strict JSON only.",
+        },
+        {
+          role: "user",
+          content: [
+            "Classify this conversation into one severity:",
+            '- "urgent": life-threatening or likely life-threatening now.',
+            '- "uncertain": insufficient clarity, conflicting signals, or unable to confirm safety.',
+            '- "non_urgent": stable and not life-threatening at this moment.',
+            "Be conservative. If unsure, return uncertain.",
+            "",
+            "Return JSON with exactly these keys:",
+            '{ "severity": "urgent|uncertain|non_urgent", "severity_conf": 0..1, "severity_reason": "short reason for operator" }',
+            "",
+            "Conversation transcript:",
+            transcript,
+          ].join("\n"),
+        },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "severity_triage",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              severity: {
+                type: "string",
+                enum: ["urgent", "uncertain", "non_urgent"],
+              },
+              severity_conf: { type: "number", minimum: 0, maximum: 1 },
+              severity_reason: { type: "string", minLength: 1, maxLength: 240 },
+            },
+            required: ["severity", "severity_conf", "severity_reason"],
+          },
+        },
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(
+      `Severity model request failed (${response.status}): ${body || "empty body"}`,
+    );
+  }
+
+  const payload = await response.json();
+  const rawContent = payload?.choices?.[0]?.message?.content;
+  if (!rawContent) {
+    throw new Error("Severity model response missing content.");
+  }
+
+  const parsed = JSON.parse(rawContent);
+  return {
+    severity: normalizeSeverity(parsed?.severity),
+    severity_conf: normalizeConfidence(parsed?.severity_conf),
+    severity_reason: String(parsed?.severity_reason || "No rationale provided."),
+  };
 }
 
 // REST Endpoints
@@ -308,6 +411,130 @@ io.on("connection", (socket) => {
 
   // Aggregate whole conversation audio
   let fullConversationPcm = [];
+  let triageTurns = [];
+  let triageIntervalHandle = null;
+  let triageInFlight = false;
+  let triageQueued = false;
+  let triageDirty = false;
+  let urgentDowngradeStreak = 0;
+  let latestSeverity = {
+    severity: "uncertain",
+    severity_conf: 0.25,
+    severity_reason: "Awaiting enough context to assess severity.",
+  };
+
+  const queueTriage = () => {
+    triageDirty = true;
+  };
+
+  const pushTriageTurn = (role, text) => {
+    const cleaned = String(text || "").trim();
+    if (!cleaned) return;
+
+    triageTurns.push({ role, text: cleaned });
+    if (triageTurns.length > TRIAGE_MAX_TURNS) {
+      triageTurns = triageTurns.slice(-TRIAGE_MAX_TURNS);
+    }
+    queueTriage();
+  };
+
+  const resolveSeverityTransition = (nextSeverity) => {
+    const current = latestSeverity.severity;
+    const proposed = nextSeverity.severity;
+
+    if (proposed === "urgent") {
+      urgentDowngradeStreak = 0;
+      return nextSeverity;
+    }
+
+    if (current === "urgent" && proposed !== "urgent") {
+      urgentDowngradeStreak += 1;
+      if (urgentDowngradeStreak < 2) {
+        return {
+          ...latestSeverity,
+          severity_reason: `Holding urgent until reconfirmed: ${nextSeverity.severity_reason}`,
+        };
+      }
+      urgentDowngradeStreak = 0;
+      return nextSeverity;
+    }
+
+    urgentDowngradeStreak = 0;
+    return nextSeverity;
+  };
+
+  const persistAndBroadcastSeverity = async (assessment) => {
+    if (!activeConversationId) return;
+    latestSeverity = assessment;
+
+    if (supabase) {
+      const { error } = await supabase
+        .from("conversations")
+        .update({
+          severity: assessment.severity,
+          severity_conf: assessment.severity_conf,
+          severity_reason: assessment.severity_reason,
+        })
+        .eq("id", activeConversationId);
+
+      if (error) {
+        console.error(
+          `❌ Failed to persist severity for ${activeConversationId}:`,
+          error,
+        );
+      } else {
+        io.emit("dashboard_update");
+      }
+    }
+
+    io.emit("severity_update", {
+      conversationId: activeConversationId,
+      severity: assessment.severity,
+      severity_conf: assessment.severity_conf,
+      severity_reason: assessment.severity_reason,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  const runTriage = async () => {
+    if (!triageDirty || !triageTurns.length || !activeConversationId) return;
+    if (triageInFlight) {
+      triageQueued = true;
+      return;
+    }
+
+    triageInFlight = true;
+    triageDirty = false;
+    try {
+      const assessment = await assessConversationSeverity(triageTurns);
+      if (!assessment) return;
+      const stabilized = resolveSeverityTransition(assessment);
+      await persistAndBroadcastSeverity(stabilized);
+    } catch (error) {
+      console.error(`[Socket ${socket.id}] Severity triage failed:`, error);
+    } finally {
+      triageInFlight = false;
+      if (triageQueued) {
+        triageQueued = false;
+        queueTriage();
+      }
+    }
+  };
+
+  const startTriageLoop = () => {
+    if (triageIntervalHandle) return;
+    triageIntervalHandle = setInterval(() => {
+      runTriage().catch((error) => {
+        console.error(`[Socket ${socket.id}] Severity loop error:`, error);
+      });
+    }, TRIAGE_INTERVAL_MS);
+  };
+
+  const stopTriageLoop = () => {
+    if (!triageIntervalHandle) return;
+    clearInterval(triageIntervalHandle);
+    triageIntervalHandle = null;
+  };
 
   // Start an emergency voice session
   socket.on("start_emergency_session", async () => {
@@ -333,6 +560,9 @@ io.on("connection", (socket) => {
             end: getUTC8Time(),
             triage: "agent",
             classification: "uncertain",
+            severity: "uncertain",
+            severity_conf: 0.25,
+            severity_reason: "Awaiting enough context to assess severity.",
           },
         ])
         .select();
@@ -349,6 +579,13 @@ io.on("connection", (socket) => {
           callerSocketId: socket.id,
           operatorSocketId: null,
           takeoverActive: false,
+        });
+        io.emit("severity_update", {
+          conversationId: activeConversationId,
+          severity: latestSeverity.severity,
+          severity_conf: latestSeverity.severity_conf,
+          severity_reason: latestSeverity.severity_reason,
+          updatedAt: new Date().toISOString(),
         });
         console.log(
           `✅ [Socket ${socket.id}] Conversation created DB ID: ${activeConversationId}`,
@@ -392,6 +629,7 @@ io.on("connection", (socket) => {
 
       openAiWs.send(JSON.stringify(sessionUpdate));
       socket.emit("session_started");
+      startTriageLoop();
     });
 
     // 2. Receive responses from OpenAI
@@ -425,6 +663,7 @@ io.on("connection", (socket) => {
             break;
 
           case "response.audio_transcript.done":
+            pushTriageTurn("agent", event.transcript);
             socket.emit("history_updated", [
               {
                 id: event.item_id || Date.now().toString(),
@@ -446,6 +685,7 @@ io.on("connection", (socket) => {
             break;
 
           case "conversation.item.input_audio_transcription.completed":
+            pushTriageTurn("user", event.transcript);
             socket.emit("history_updated", [
               {
                 id: event.item_id || Date.now().toString(),
@@ -495,6 +735,7 @@ io.on("connection", (socket) => {
     openAiWs.on("close", () => {
       console.log(`[Socket ${socket.id}] OpenAI WebSocket closed`);
       socket.emit("session_stopped");
+      stopTriageLoop();
 
       // Add actual end time to the conversation when socket closes
       if (activeConversationId) {
@@ -587,6 +828,7 @@ io.on("connection", (socket) => {
       openAiWs.close();
       openAiWs = null;
     }
+    stopTriageLoop();
   });
 
   socket.on("operator_takeover_start", async (conversationId) => {
@@ -713,6 +955,7 @@ io.on("connection", (socket) => {
       openAiWs.close();
       openAiWs = null;
     }
+    stopTriageLoop();
   });
 });
 
