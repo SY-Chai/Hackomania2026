@@ -67,58 +67,6 @@ function mapHistoryToMessages(history: any[]): ChatMessage[] {
     .filter(Boolean) as ChatMessage[];
 }
 
-function float32ToInt16(float32: Float32Array): Int16Array {
-  const int16 = new Int16Array(float32.length);
-  for (let i = 0; i < float32.length; i++) {
-    const s = Math.max(-1, Math.min(1, float32[i]));
-    int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-  }
-  return int16;
-}
-
-function resampleTo24k(input: Float32Array, inputSampleRate: number): Int16Array {
-  if (inputSampleRate === 24000) {
-    return float32ToInt16(input);
-  }
-
-  const ratio = inputSampleRate / 24000;
-  const newLength = Math.round(input.length / ratio);
-  const result = new Float32Array(newLength);
-
-  let offsetResult = 0;
-  let offsetBuffer = 0;
-
-  while (offsetResult < result.length) {
-    const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
-    let accum = 0;
-    let count = 0;
-
-    for (let i = offsetBuffer; i < nextOffsetBuffer && i < input.length; i++) {
-      accum += input[i];
-      count++;
-    }
-
-    result[offsetResult] = count > 0 ? accum / count : 0;
-    offsetResult++;
-    offsetBuffer = nextOffsetBuffer;
-  }
-
-  return float32ToInt16(result);
-}
-
-function concatInt16Arrays(chunks: Int16Array[]): Int16Array {
-  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const merged = new Int16Array(totalLength);
-  let offset = 0;
-
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  return merged;
-}
-
 export default function Page() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -133,15 +81,6 @@ export default function Page() {
   const [error, setError] = useState<string | null>(null);
 
   const sessionRef = useRef<RealtimeSession | null>(null);
-
-  const inputAudioContextRef = useRef<AudioContext | null>(null);
-  const playbackAudioContextRef = useRef<AudioContext | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-
-  const playbackQueueRef = useRef<Int16Array[]>([]);
-  const playbackTimerRef = useRef<number | null>(null);
 
   const agent = useMemo(
     () =>
@@ -163,287 +102,142 @@ Your goals:
     []
   );
 
-  const stopPlaybackLoop = useCallback(() => {
-    if (playbackTimerRef.current) {
-      window.clearInterval(playbackTimerRef.current);
-      playbackTimerRef.current = null;
-    }
-    playbackQueueRef.current = [];
-  }, []);
-
-  const startPlaybackLoop = useCallback(() => {
-    if (playbackTimerRef.current) return;
-
-    playbackTimerRef.current = window.setInterval(() => {
-      const ctx = playbackAudioContextRef.current;
-      if (!ctx) return;
-      if (playbackQueueRef.current.length === 0) return;
-
-      const chunk = playbackQueueRef.current.shift();
-      if (!chunk) return;
-
-      const audioBuffer = ctx.createBuffer(1, chunk.length, 24000);
-      const channel = audioBuffer.getChannelData(0);
-
-      for (let i = 0; i < chunk.length; i++) {
-        channel[i] = chunk[i] / 32768;
-      }
-
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(ctx.destination);
-      source.start();
-    }, 40);
-  }, []);
-
-  const stopMicrophoneCapture = useCallback(() => {
-    try {
-      processorRef.current?.disconnect();
-      sourceRef.current?.disconnect();
-      processorRef.current = null;
-      sourceRef.current = null;
-    } catch {}
-
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-    }
-
-    if (inputAudioContextRef.current) {
-      inputAudioContextRef.current.close().catch(() => {});
-      inputAudioContextRef.current = null;
-    }
-  }, []);
-
   const stopConversation = useCallback(() => {
-    console.log("🔎 WS DEBUG: stopConversation called");
-
-    stopMicrophoneCapture();
-    stopPlaybackLoop();
-
-    if (playbackAudioContextRef.current) {
-      playbackAudioContextRef.current.close().catch(() => {});
-      playbackAudioContextRef.current = null;
-    }
+    console.log("🔎 DEBUG: stopConversation called");
 
     try {
       sessionRef.current?.close();
-      console.log("🔎 WS DEBUG: session closed");
+      console.log("🔎 DEBUG: session closed");
     } catch (err) {
-      console.warn("🔎 WS DEBUG: error closing session", err);
+      console.warn("🔎 DEBUG: error closing session", err);
     }
 
     sessionRef.current = null;
     setIsConnected(false);
     setIsConnecting(false);
     setStatus("Disconnected");
-  }, [stopMicrophoneCapture, stopPlaybackLoop]);
-
-  const startMicrophoneCapture = useCallback(async (session: RealtimeSession) => {
-    console.log("🎤 WS DEBUG: requesting microphone");
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        noiseSuppression: true,
-        echoCancellation: true,
-        autoGainControl: true,
-        channelCount: 1,
-      },
-    });
-
-    mediaStreamRef.current = stream;
-
-    const audioContext = new AudioContext();
-    inputAudioContextRef.current = audioContext;
-
-    const source = audioContext.createMediaStreamSource(stream);
-    sourceRef.current = source;
-
-    const processor = audioContext.createScriptProcessor(4096, 1, 1);
-    processorRef.current = processor;
-
-    source.connect(processor);
-    processor.connect(audioContext.destination);
-
-    processor.onaudioprocess = (event) => {
-      const input = event.inputBuffer.getChannelData(0);
-      const copied = new Float32Array(input);
-      const pcm16 = resampleTo24k(copied, audioContext.sampleRate);
-
-      session.sendAudio(pcm16.buffer, { commit: false });
-    };
-
-    console.log("🎤 WS DEBUG: microphone streaming started at", audioContext.sampleRate);
   }, []);
 
   const startConversation = useCallback(async () => {
-    console.log("🔎 WS DEBUG: startConversation triggered");
+    console.log("🔎 DEBUG: startConversation triggered");
 
     if (isConnecting || isConnected) {
-      console.log("🔎 WS DEBUG: already connecting or connected");
+      console.log("🔎 DEBUG: already connecting or connected");
       return;
     }
 
     setError(null);
     setIsConnecting(true);
-    setStatus("Requesting secure session...");
+    setStatus("Requesting microphone and secure session...");
 
     try {
+      console.log("🔎 DEBUG: requesting token from /api/realtime/session");
+
       const tokenRes = await fetch("/api/realtime/session", {
         method: "POST",
       });
 
-      console.log("🔎 WS DEBUG: token response status:", tokenRes.status);
+      console.log("🔎 DEBUG: token response status:", tokenRes.status);
 
       if (!tokenRes.ok) {
         throw new Error("Failed to create realtime session token.");
       }
 
       const tokenJson = await tokenRes.json();
-      console.log("🔎 WS DEBUG: token JSON:", tokenJson);
+      console.log("🔎 DEBUG: token JSON:", tokenJson);
 
       const clientSecret =
         tokenJson.client_secret ?? tokenJson.value ?? tokenJson.clientSecret;
+
+      console.log("🔎 DEBUG: extracted clientSecret:", clientSecret);
 
       if (!clientSecret) {
         throw new Error("No client secret returned from /api/realtime/session.");
       }
 
-      if (!playbackAudioContextRef.current) {
-        playbackAudioContextRef.current = new AudioContext({ sampleRate: 24000 });
-      }
+      console.log("🔎 DEBUG: creating RealtimeSession");
 
       const session = new RealtimeSession(agent, {
-        transport: "websocket",
         model: "gpt-realtime",
-        config: {
-          outputModalities: ["audio"],
-          audio: {
-            input: {
-              format: "pcm16",
-              noiseReduction: {
-                type: "far_field",
-              },
-              transcription: {
-                model: "gpt-4o-mini-transcribe",
-              },
-              turnDetection: {
-                type: "server_vad",
-                threshold: 0.65,
-                silenceDurationMs: 1000,
-                prefixPaddingMs: 300,
-                interruptResponse: true,
-                createResponse: true,
-              },
-            },
-            output: {
-              format: "pcm16",
-            },
-          },
-        },
       });
 
       sessionRef.current = session;
 
+      console.log("🔎 DEBUG: session created", session);
+
       session.on("history_updated", (history: any[]) => {
-        console.log("📝 WS DEBUG: history updated", history);
+        console.log("🔎 DEBUG: history_updated event", history);
+
         const nextMessages = mapHistoryToMessages(history);
+
         setMessages((prev) => {
           const intro = prev.find((m) => m.id === "intro");
           return nextMessages.length > 0 ? nextMessages : intro ? [intro] : prev;
         });
       });
 
-      session.on("audio", (event: any) => {
-        console.log("🔊 WS DEBUG: received audio chunk", event);
-        const data = event?.data;
-
-        if (!data) return;
-
-        let pcmChunk: Int16Array | null = null;
-
-        if (data instanceof ArrayBuffer) {
-          pcmChunk = new Int16Array(data);
-        } else if (ArrayBuffer.isView(data)) {
-          pcmChunk = new Int16Array(data.buffer.slice(0));
-        }
-
-        if (pcmChunk) {
-          playbackQueueRef.current.push(pcmChunk);
-        }
-      });
-
       session.on("audio_start", () => {
-        console.log("🎤 WS DEBUG: audio_start");
+        console.log("🎤 DEBUG: audio_start detected");
         setStatus("Listening...");
       });
 
       session.on("audio_stopped", () => {
-        console.log("🛑 WS DEBUG: audio_stopped");
-        // commit the current user turn
-        // session.sendAudio(new ArrayBuffer(0), { commit: true });
+        console.log("🛑 DEBUG: audio_stopped");
         setStatus("Processing...");
       });
 
       session.on("audio_interrupted", () => {
-        console.log("⚠️ WS DEBUG: audio_interrupted");
+        console.log("⚠️ DEBUG: audio_interrupted");
         setStatus("Interrupted");
       });
 
       session.on("error", (err: any) => {
-        console.error("❌ WS DEBUG: realtime session error (full)", err);
-        console.error("❌ WS DEBUG: realtime session error.error", err?.error);
-        console.error("❌ WS DEBUG: realtime session error.message", err?.message);
-        console.error("❌ WS DEBUG: realtime session error JSON", JSON.stringify(err, null, 2));
-        setError(
-          err?.error?.message ??
-          err?.message ??
-          "Something went wrong in the voice session."
-        );
+        console.error("❌ DEBUG: realtime session error", err);
+        setError(err?.message ?? "Something went wrong in the voice session.");
         setStatus("Error");
       });
 
-      console.log("🔌 WS DEBUG: connecting websocket session...");
+      console.log("🔎 DEBUG: connecting to realtime session...");
+
       await session.connect({
         apiKey: clientSecret,
       });
 
-      console.log("✅ WS DEBUG: websocket session connected");
+      // session.sendMessage(
+      //   "The senior has pressed the Personal Alert Button. Please greet them and ask what happened."
+      // );
 
-      startPlaybackLoop();
-      await startMicrophoneCapture(session);
+      console.log("✅ DEBUG: session connected successfully");
 
       setIsConnected(true);
       setStatus("Connected — speak now");
 
-      session.sendMessage(
-        "The senior has pressed the Personal Alert Button. Please greet them and ask what happened."
-      );
+      console.log("🎤 DEBUG: waiting for microphone input...");
     } catch (err: any) {
-      console.error("❌ WS DEBUG: startConversation failed", err);
+      console.error("❌ DEBUG: startConversation failed", err);
+
       setError(err?.message ?? "Failed to start the voice conversation.");
       setStatus("Failed to connect");
+
       stopConversation();
     } finally {
       setIsConnecting(false);
     }
-  }, [
-    agent,
-    isConnected,
-    isConnecting,
-    startMicrophoneCapture,
-    startPlaybackLoop,
-    stopConversation,
-  ]);
+  }, [agent, isConnected, isConnecting, stopConversation]);
 
   useEffect(() => {
-    console.log("🔎 WS DEBUG: component mounted");
+    console.log("🔎 DEBUG: component mounted");
 
     return () => {
-      console.log("🔎 WS DEBUG: component unmounting");
-      stopConversation();
+      console.log("🔎 DEBUG: component unmounting");
+
+      try {
+        sessionRef.current?.close();
+      } catch (err) {
+        console.warn("🔎 DEBUG: error during cleanup", err);
+      }
     };
-  }, [stopConversation]);
+  }, []);
 
   return (
     <main className="min-h-screen bg-gray-50 text-gray-900">
@@ -460,7 +254,7 @@ Your goals:
               Voice conversation appears here after the red button is pressed.
             </p>
           </div>
-
+  
           <div className="flex items-center gap-3 border-b border-gray-200 px-6 py-4 text-sm">
             <div
               className={`h-2.5 w-2.5 rounded-full ${
@@ -473,12 +267,12 @@ Your goals:
             />
             <span className="text-gray-700">{status}</span>
           </div>
-
+  
           <div className="flex-1 space-y-4 overflow-y-auto px-6 py-6">
             {messages.map((message) => {
               const isUser = message.role === "user";
               const isAssistant = message.role === "assistant";
-
+  
               return (
                 <div
                   key={message.id}
@@ -492,7 +286,11 @@ Your goals:
                 >
                   <div
                     className={`mb-1 text-xs font-medium uppercase tracking-wide ${
-                      isUser ? "text-red-100" : "text-gray-500"
+                      isUser
+                        ? "text-red-100"
+                        : isAssistant
+                        ? "text-gray-500"
+                        : "text-gray-500"
                     }`}
                   >
                     {isUser ? "Senior" : isAssistant ? "AI Responder" : "System"}
@@ -501,7 +299,7 @@ Your goals:
                 </div>
               );
             })}
-
+  
             {error && (
               <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 <AlertCircle className="mt-0.5 size-4 shrink-0" />
@@ -510,7 +308,7 @@ Your goals:
             )}
           </div>
         </section>
-
+  
         <aside className="flex flex-col items-center justify-center gap-8 px-6 py-10 bg-white">
           <div className="text-center">
             <p className="text-sm uppercase tracking-[0.24em] text-gray-400">
@@ -523,7 +321,7 @@ Your goals:
               The button starts a live voice session with the AI emergency assistant.
             </p>
           </div>
-
+  
           <Button
             onClick={isConnected ? stopConversation : startConversation}
             disabled={isConnecting}
@@ -542,15 +340,16 @@ Your goals:
             ) : (
               <span className="flex flex-col items-center gap-2">
                 <Mic className="size-7" />
+                {/* Press for Help */}
               </span>
             )}
           </Button>
-
+  
           <div className="max-w-sm rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700 shadow-sm">
             <div className="mb-2 font-medium text-gray-900">Demo notes</div>
             <p>
-              This version uses WebSocket transport, so microphone capture and
-              speaker playback are handled manually in the browser.
+              On first press, the browser will ask for microphone permission. The
+              transcript updates on the left as the live conversation progresses.
             </p>
           </div>
         </aside>
