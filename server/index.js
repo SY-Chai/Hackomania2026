@@ -333,6 +333,7 @@ io.on("connection", (socket) => {
         );
       } else if (data && data.length > 0) {
         activeConversationId = data[0].id;
+        socket.join(activeConversationId);
         console.log(
           `✅ [Socket ${socket.id}] Conversation created DB ID: ${activeConversationId}`,
         );
@@ -389,6 +390,13 @@ io.on("connection", (socket) => {
               const buffer = Buffer.from(event.delta, "base64");
               assistantAudioBuffer.push(buffer);
               socket.emit("server_audio", buffer);
+              if (activeConversationId) {
+                socket.to(activeConversationId).emit(
+                  "conversation_audio",
+                  "agent",
+                  buffer,
+                );
+              }
             }
             break;
 
@@ -520,6 +528,9 @@ io.on("connection", (socket) => {
       // Stream buffering
       if (isRecordingUser) {
         userAudioBuffer.push(buf);
+        if (activeConversationId) {
+          socket.to(activeConversationId).emit("conversation_audio", "user", buf);
+        }
       } else {
         rollingBuffer.push(buf);
         if (rollingBuffer.length > MAX_ROLLING_CHUNKS) {
@@ -539,8 +550,17 @@ io.on("connection", (socket) => {
 
   // A user/operator joins a specific conversation room
   socket.on("join_conversation", (conversationId) => {
+    if (!conversationId) return;
     socket.join(conversationId);
+    socket.emit("conversation_joined", conversationId);
     console.log(`Socket ${socket.id} joined conversation ${conversationId}`);
+  });
+
+  socket.on("leave_conversation", (conversationId) => {
+    if (!conversationId) return;
+    socket.leave(conversationId);
+    socket.emit("conversation_left", conversationId);
+    console.log(`Socket ${socket.id} left conversation ${conversationId}`);
   });
 
   // Handle incoming real-time audio/text segments
