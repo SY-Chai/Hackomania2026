@@ -8,17 +8,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { resolveSocketServerUrl } from "@/lib/socket";
 import { type DBConversation, type DBMessage } from "@/lib/supabase";
-import {
-  deriveRole,
-  normalizePhase,
-  sortMessages,
-} from "@/lib/dashboard-utils";
+import { deriveRole, normalizePhase } from "@/lib/dashboard-utils";
 import { toPcm16, resampleTo24k, schedulePcm16Playback } from "@/lib/audio";
-
-const CLOSED_STATUSES = new Set(["resolved", "closed", "completed", "done"]);
-function isConversationOngoing(classification: string | null): boolean {
-  return !classification || !CLOSED_STATUSES.has(classification.toLowerCase());
-}
 import {
   MessageSquare,
   User,
@@ -158,6 +149,8 @@ function getSeverityRank(severity: UIConversation["severity"]) {
   return 3;
 }
 
+
+
 interface Props {
   conversations: UIConversation[];
   onCollapse?: () => void;
@@ -174,14 +167,10 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const [liveAudioStatus, setLiveAudioStatus] = useState("Live audio off");
   const [liveAudioError, setLiveAudioError] = useState<string | null>(null);
   const [lastSpeaker, setLastSpeaker] = useState<LiveSpeaker | null>(null);
-  const [takeoverConversationId, setTakeoverConversationId] = useState<
-    string | null
-  >(null);
-  const [pendingTakeoverConversationId, setPendingTakeoverConversationId] =
-    useState<string | null>(null);
+  const [takeoverConversationId, setTakeoverConversationId] = useState<string | null>(null);
+  const [pendingTakeoverConversationId, setPendingTakeoverConversationId] = useState<string | null>(null);
   const [takeoverError, setTakeoverError] = useState<string | null>(null);
 
-  const usersMapRef = useRef<Map<string, string>>(new Map());
   const listenerSocketRef = useRef<Socket | null>(null);
   const playbackAudioContextRef = useRef<AudioContext | null>(null);
   const nextPlaybackTimeRef = useRef(0);
@@ -208,23 +197,8 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
         if (!cancelled && data) setPabLocation(data);
       })
       .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [selected?.pabId]);
-
-  useEffect(() => {
-    fetch("/api/users")
-      .then((r) => r.json())
-      .then((data: { id: string; type: string | null }[]) => {
-        const map = new Map<string, string>();
-        for (const u of data) {
-          if (u.type) map.set(u.id, u.type);
-        }
-        usersMapRef.current = map;
-      })
-      .catch(() => {});
-  }, []);
 
   const stopOperatorMicrophoneCapture = useCallback(() => {
     try {
@@ -284,9 +258,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
           });
         };
       } catch {
-        setTakeoverError(
-          "Microphone access is required for operator takeover.",
-        );
+        setTakeoverError("Microphone access is required for operator takeover.");
         pendingTakeoverConversationIdRef.current = null;
         setPendingTakeoverConversationId(null);
         setTakeoverConversationId(null);
@@ -297,11 +269,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   );
 
   const schedulePlayback = useCallback((pcmChunk: Int16Array) => {
-    schedulePcm16Playback(
-      playbackAudioContextRef.current,
-      nextPlaybackTimeRef,
-      pcmChunk,
-    );
+    schedulePcm16Playback(playbackAudioContextRef.current, nextPlaybackTimeRef, pcmChunk);
   }, []);
 
   useEffect(() => {
@@ -325,14 +293,14 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
         prev.map((conv) =>
           conv.id === event.conversationId
             ? {
-                ...conv,
-                severity: event.severity ?? conv.severity,
-                severityConf:
-                  event.severity_conf == null
-                    ? conv.severityConf
-                    : event.severity_conf,
-                severityReason: event.severity_reason ?? conv.severityReason,
-              }
+              ...conv,
+              severity: event.severity ?? conv.severity,
+              severityConf:
+                event.severity_conf == null
+                  ? conv.severityConf
+                  : event.severity_conf,
+              severityReason: event.severity_reason ?? conv.severityReason,
+            }
             : conv,
         ),
       );
@@ -374,13 +342,13 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
         prev.map((conv) =>
           conv.id === c.id
             ? {
-                ...conv,
-                phase: normalizePhase(c.triage),
-                classification: c.classification,
-                severity: c.severity,
-                severityConf: c.severity_conf,
-                severityReason: c.severity_reason,
-              }
+              ...conv,
+              phase: normalizePhase(c.triage),
+              classification: c.classification,
+              severity: c.severity,
+              severityConf: c.severity_conf,
+              severityReason: c.severity_reason,
+            }
             : conv,
         ),
       );
@@ -388,19 +356,11 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
     es.addEventListener("message_insert", (e) => {
       const m = JSON.parse(e.data) as DBMessage;
-      const userType = m.author_id
-        ? usersMapRef.current.get(m.author_id)
-        : undefined;
-      const role = deriveRole(userType);
+      const role = deriveRole(m.author_id);
       const newMsg = {
         id: m.id,
         sender: role,
-        senderName:
-          role === "agent"
-            ? "AI Agent"
-            : role === "human"
-              ? "Operator"
-              : "Senior",
+        senderName: role === "agent" ? "AI Agent" : role === "human" ? "Operator" : "Senior",
         content: m.content ?? "",
         timestamp: m.timestamp ?? "",
       };
@@ -408,12 +368,11 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
         prev.map((conv) =>
           conv.id === m.conversation_id
             ? {
-                ...conv,
-                pabId:
-                  !conv.pabId && role === "senior" ? m.author_id : conv.pabId,
-                lastActivity: m.timestamp ?? conv.lastActivity,
-                messages: sortMessages([...conv.messages, newMsg]),
-              }
+              ...conv,
+              pabId: !conv.pabId && role === "senior" ? m.author_id : conv.pabId,
+              lastActivity: m.timestamp ?? conv.lastActivity,
+              messages: [...conv.messages, newMsg],
+            }
             : conv,
         ),
       );
@@ -559,8 +518,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   ]);
 
   const orderedConversations = [...liveConversations].sort((a, b) => {
-    const severityDelta =
-      getSeverityRank(a.severity) - getSeverityRank(b.severity);
+    const severityDelta = getSeverityRank(a.severity) - getSeverityRank(b.severity);
     if (severityDelta !== 0) return severityDelta;
 
     const aTs = a.lastActivity ? new Date(a.lastActivity).getTime() : 0;
@@ -604,8 +562,6 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const isListeningSelected = listenTargetId === selected.id;
   const isTakeoverSelected = takeoverConversationId === selected.id;
   const isTakeoverPending = pendingTakeoverConversationId === selected.id;
-  const isSelectedOngoing =
-    isConversationOngoing(selected.classification) && selected.pabId !== null;
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
@@ -616,6 +572,9 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
             <h1 className="text-sm font-semibold text-slate-900">
               Conversations
             </h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {liveConversations.length} total
+            </p>
           </div>
           {onCollapse && (
             <button
@@ -665,10 +624,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                   onClick={() => {
                     setSelectedId(conv.id);
                     if (listenTargetId && listenTargetId !== conv.id) {
-                      listenerSocketRef.current?.emit(
-                        "operator_takeover_stop",
-                        listenTargetId,
-                      );
+                      listenerSocketRef.current?.emit("operator_takeover_stop", listenTargetId);
                       stopOperatorMicrophoneCapture();
                       setLiveAudioStatus("Live audio off");
                       setLiveAudioError(null);
@@ -758,19 +714,15 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               <span className="flex items-center gap-1 text-xs text-slate-500 mt-0.5">
                 <MapPin className="w-3 h-3 shrink-0" />
                 {pabLocation
-                  ? [
-                      pabLocation.unitNo,
-                      pabLocation.streetName,
-                      pabLocation.postalCode && `S(${pabLocation.postalCode})`,
-                    ]
+                  ? [pabLocation.unitNo, pabLocation.streetName, pabLocation.postalCode && `S(${pabLocation.postalCode})`]
                       .filter(Boolean)
                       .join(", ") || `ID: ${selected.id.slice(0, 8)}…`
                   : `ID: ${selected.id.slice(0, 8)}…`}
               </span>
             </div>
           </div>
-          <div className="flex w-full flex-wrap items-center justify-center gap-2 min-w-0">
-            <div className="flex flex-wrap items-center justify-center gap-2">
+          <div className="flex w-full flex-wrap items-center justify-start gap-2 min-w-0">
+            <div className="flex flex-wrap items-center justify-start gap-2">
               <span
                 className={cn(
                   "text-xs font-medium px-2 py-0.5 rounded border",
@@ -794,117 +746,105 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 </span>
               )}
             </div>
-            {isSelectedOngoing && (
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                <Button
-                  className="min-w-35 justify-center"
-                  variant={isListeningSelected ? "destructive" : "outline"}
-                  size="sm"
-                  onClick={() => {
-                    if (isListeningSelected) {
-                      listenerSocketRef.current?.emit(
-                        "operator_takeover_stop",
-                        selected.id,
-                      );
-                      stopOperatorMicrophoneCapture();
-                      setLiveAudioStatus("Live audio off");
-                      setLiveAudioError(null);
-                      setIsAudioConnecting(false);
-                      pendingTakeoverConversationIdRef.current = null;
-                      setPendingTakeoverConversationId(null);
-                      setTakeoverConversationId(null);
-                      setTakeoverError(null);
-                      setListenTargetId(null);
-                      return;
-                    }
-                    setLiveAudioError(null);
-                    setLastSpeaker(null);
-                    setIsAudioConnecting(true);
-                    setLiveAudioStatus("Connecting to live audio...");
-                    setListenTargetId(selected.id);
-                  }}
-                  disabled={isAudioConnecting && isListeningSelected}
-                >
-                  {isAudioConnecting && isListeningSelected ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      Connecting
-                    </>
-                  ) : isListeningSelected ? (
-                    <>
-                      <Headphones className="w-3.5 h-3.5" />
-                      Stop listening
-                    </>
-                  ) : (
-                    <>
-                      <Headphones className="w-3.5 h-3.5" />
-                      Listen live
-                    </>
-                  )}
-                </Button>
-                <Button
-                  className="min-w-35 justify-center"
-                  variant={isTakeoverSelected ? "destructive" : "default"}
-                  size="sm"
-                  onClick={() => {
-                    if (isTakeoverSelected || isTakeoverPending) {
-                      listenerSocketRef.current?.emit(
-                        "operator_takeover_stop",
-                        selected.id,
-                      );
-                      stopOperatorMicrophoneCapture();
-                      pendingTakeoverConversationIdRef.current = null;
-                      setPendingTakeoverConversationId(null);
-                      setTakeoverConversationId(null);
-                      setTakeoverError(null);
-                      setLiveAudioStatus(
-                        isListeningSelected
-                          ? "Listening live"
-                          : "Live audio off",
-                      );
-                      return;
-                    }
+            <div className="flex flex-wrap items-center justify-start gap-2">
+              <Button
+                className="min-w-[140px] justify-center"
+                variant={isListeningSelected ? "destructive" : "outline"}
+                size="sm"
+              onClick={() => {
+                if (isListeningSelected) {
+                  listenerSocketRef.current?.emit("operator_takeover_stop", selected.id);
+                  stopOperatorMicrophoneCapture();
+                  setLiveAudioStatus("Live audio off");
+                  setLiveAudioError(null);
+                  setIsAudioConnecting(false);
+                  pendingTakeoverConversationIdRef.current = null;
+                  setPendingTakeoverConversationId(null);
+                  setTakeoverConversationId(null);
+                  setTakeoverError(null);
+                  setListenTargetId(null);
+                  return;
+                }
+                setLiveAudioError(null);
+                setLastSpeaker(null);
+                setIsAudioConnecting(true);
+                setLiveAudioStatus("Connecting to live audio...");
+                setListenTargetId(selected.id);
+              }}
+              disabled={isAudioConnecting && isListeningSelected}
+            >
+              {isAudioConnecting && isListeningSelected ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Connecting
+                </>
+              ) : isListeningSelected ? (
+                <>
+                  <Headphones className="w-3.5 h-3.5" />
+                  Stop listening
+                </>
+              ) : (
+                <>
+                  <Headphones className="w-3.5 h-3.5" />
+                  Listen live
+                </>
+              )}
+              </Button>
+              <Button
+                className="min-w-[140px] justify-center"
+                variant={isTakeoverSelected ? "destructive" : "default"}
+                size="sm"
+              onClick={() => {
+                if (isTakeoverSelected || isTakeoverPending) {
+                  listenerSocketRef.current?.emit("operator_takeover_stop", selected.id);
+                  stopOperatorMicrophoneCapture();
+                  pendingTakeoverConversationIdRef.current = null;
+                  setPendingTakeoverConversationId(null);
+                  setTakeoverConversationId(null);
+                  setTakeoverError(null);
+                  setLiveAudioStatus(isListeningSelected ? "Listening live" : "Live audio off");
+                  return;
+                }
 
-                    setLiveAudioError(null);
-                    setTakeoverError(null);
-                    pendingTakeoverConversationIdRef.current = selected.id;
-                    setPendingTakeoverConversationId(selected.id);
-                    setLiveAudioStatus("Connecting operator call...");
+                setLiveAudioError(null);
+                setTakeoverError(null);
+                pendingTakeoverConversationIdRef.current = selected.id;
+                setPendingTakeoverConversationId(selected.id);
+                setLiveAudioStatus("Connecting operator call...");
 
-                    const socket = listenerSocketRef.current;
-                    if (
-                      isListeningSelected &&
-                      socket?.connected &&
-                      joinedConversationIdRef.current === selected.id
-                    ) {
-                      socket.emit("operator_takeover_start", selected.id);
-                      return;
-                    }
+                const socket = listenerSocketRef.current;
+                if (
+                  isListeningSelected &&
+                  socket?.connected &&
+                  joinedConversationIdRef.current === selected.id
+                ) {
+                  socket.emit("operator_takeover_start", selected.id);
+                  return;
+                }
 
-                    setIsAudioConnecting(true);
-                    setListenTargetId(selected.id);
-                  }}
-                  disabled={isAudioConnecting && !isListeningSelected}
-                >
-                  {isTakeoverPending ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      Taking over
-                    </>
-                  ) : isTakeoverSelected ? (
-                    <>
-                      <PhoneOff className="w-3.5 h-3.5" />
-                      End call
-                    </>
-                  ) : (
-                    <>
-                      <Mic className="w-3.5 h-3.5" />
-                      Take over
-                    </>
-                  )}
-                </Button>
-              </div>
-            )}
+                setIsAudioConnecting(true);
+                setListenTargetId(selected.id);
+              }}
+              disabled={isAudioConnecting && !isListeningSelected}
+            >
+              {isTakeoverPending ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Taking over
+                </>
+              ) : isTakeoverSelected ? (
+                <>
+                  <PhoneOff className="w-3.5 h-3.5" />
+                  End call
+                </>
+              ) : (
+                <>
+                  <Mic className="w-3.5 h-3.5" />
+                  Take over
+                </>
+              )}
+              </Button>
+            </div>
           </div>
         </div>
 
@@ -936,18 +876,13 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
           {(liveAudioError || takeoverError) && (
             <>
               <Separator orientation="vertical" className="h-3" />
-              <span className="text-red-600">
-                {liveAudioError || takeoverError}
-              </span>
+              <span className="text-red-600">{liveAudioError || takeoverError}</span>
             </>
           )}
           {selected.severityReason && (
             <>
               <Separator orientation="vertical" className="h-3" />
-              <span
-                className="text-slate-400 truncate max-w-xs"
-                title={selected.severityReason}
-              >
+              <span className="text-slate-400 truncate max-w-xs" title={selected.severityReason}>
                 {selected.severityReason}
               </span>
             </>
@@ -956,7 +891,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
         <div className="flex-1 overflow-y-auto min-h-0 px-2 py-2">
           <div className="space-y-4 max-w-3xl">
-            {sortMessages(selected.messages).map((msg) => {
+            {selected.messages.map((msg) => {
               const cfg = senderConfig[msg.sender];
               const Icon = cfg.icon;
               const isRight = msg.sender === "senior";
