@@ -7,6 +7,8 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { resolveSocketServerUrl } from "@/lib/socket";
+import { supabaseBrowser, type DBConversation, type DBMessage } from "@/lib/supabase";
+import { deriveRole, normalizePhase } from "@/lib/dashboard-utils";
 import { toPcm16, resampleTo24k, schedulePcm16Playback } from "@/lib/audio";
 import {
   MessageSquare,
@@ -276,6 +278,86 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
     return () => {
       severitySocket.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    const channel = supabaseBrowser
+      .channel("dashboard-realtime")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "conversations" },
+        (payload) => {
+          const c = payload.new as DBConversation;
+          setLiveConversations((prev) => {
+            if (prev.some((conv) => conv.id === c.id)) return prev;
+            return [
+              {
+                id: c.id,
+                phase: normalizePhase(c.triage),
+                classification: c.classification,
+                severity: c.severity,
+                severityConf: c.severity_conf,
+                severityReason: c.severity_reason,
+                startedAt: c.start,
+                lastActivity: c.start,
+                messages: [],
+              },
+              ...prev,
+            ];
+          });
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "conversations" },
+        (payload) => {
+          const c = payload.new as DBConversation;
+          setLiveConversations((prev) =>
+            prev.map((conv) =>
+              conv.id === c.id
+                ? {
+                    ...conv,
+                    phase: normalizePhase(c.triage),
+                    classification: c.classification,
+                    severity: c.severity,
+                    severityConf: c.severity_conf,
+                    severityReason: c.severity_reason,
+                  }
+                : conv,
+            ),
+          );
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "messages" },
+        (payload) => {
+          const m = payload.new as DBMessage;
+          const newMsg = {
+            id: m.id,
+            sender: deriveRole(m.author),
+            senderName: m.author,
+            content: m.content ?? "",
+            timestamp: m.timestamp ?? "",
+          };
+          setLiveConversations((prev) =>
+            prev.map((conv) =>
+              conv.id === m.conversation_id
+                ? {
+                    ...conv,
+                    lastActivity: m.timestamp ?? conv.lastActivity,
+                    messages: [...conv.messages, newMsg],
+                  }
+                : conv,
+            ),
+          );
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabaseBrowser.removeChannel(channel);
     };
   }, []);
 

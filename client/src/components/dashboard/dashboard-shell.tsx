@@ -1,13 +1,10 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
-import { io } from "socket.io-client";
 import { MapPin, Phone, AlertTriangle, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConversationsView, type UIConversation } from "./conversations-view";
 import { SingaporeMap, type PABMarker } from "@/components/map/singapore-map";
-import { resolveSocketServerUrl } from "@/lib/socket";
 
 interface Props {
   conversations: UIConversation[];
@@ -33,24 +30,8 @@ export function DashboardShell({
   stationary,
   ongoing,
 }: Props) {
-  const router = useRouter();
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const [collapsed, setCollapsed] = useState(false);
-
-  useEffect(() => {
-    // Connect to the Node backend listening on port 3001
-    const socket = io(resolveSocketServerUrl());
-
-    socket.on("dashboard_update", () => {
-      console.log("Dashboard update received, refreshing data...");
-      // router.refresh() triggers a re-fetch of Server Components data without resetting client state (e.g. panelWidth)
-      router.refresh();
-    });
-
-    return () => {
-      socket.disconnect();
-    };
-  }, [router]);
 
   // Refs to track drag state without causing re-renders
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);

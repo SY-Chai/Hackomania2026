@@ -10,6 +10,8 @@ import {
   isOngoing,
 } from "@/lib/dashboard-utils";
 
+export const dynamic = "force-dynamic";
+
 export default async function DashboardPage() {
   let pabs: Awaited<ReturnType<typeof fetchPABs>> = [];
   let rawConversations: Awaited<
