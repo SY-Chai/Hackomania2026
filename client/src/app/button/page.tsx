@@ -7,7 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { resolveSocketServerUrl } from "@/lib/socket";
-import { resampleTo24k, schedulePcm16Playback } from "@/lib/audio";
+import { resampleTo24k, schedulePcm16Playback, classifyChunk, resetVadState } from "@/lib/audio";
 
 type ChatMessage = {
   id: string;
@@ -71,6 +71,7 @@ function ButtonPageContent() {
   }, []);
 
   const stopMicrophoneCapture = useCallback(() => {
+    resetVadState();
     try {
       processorRef.current?.disconnect();
       sourceRef.current?.disconnect();
@@ -143,9 +144,18 @@ function ButtonPageContent() {
         processor.onaudioprocess = (event) => {
           const input = event.inputBuffer.getChannelData(0);
           const copied = new Float32Array(input);
-          const pcm16 = resampleTo24k(copied, audioContext.sampleRate);
+          const vadResult = classifyChunk(copied);
 
-          socket.emit("client_audio", pcm16.buffer);
+          if (vadResult === "speech") {
+            const pcm16 = resampleTo24k(copied, audioContext.sampleRate);
+            socket.emit("client_audio", pcm16.buffer);
+          } else if (vadResult === "silence_after_speech") {
+            // Send any trailing audio then signal commit
+            const pcm16 = resampleTo24k(copied, audioContext.sampleRate);
+            socket.emit("client_audio", pcm16.buffer);
+            socket.emit("commit_audio");
+          }
+          // "silence" → skip, don't send
         };
 
         console.log(

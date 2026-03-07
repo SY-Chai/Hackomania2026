@@ -11,10 +11,6 @@ const MODAL_AGENT_WS_URL = process.env.MODAL_AGENT_WS_URL || "";
 const OPENAI_REALTIME_URL =
   "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview";
 
-// Silence duration (ms) before committing the audio buffer to the Modal agent.
-// Only used when USE_MODAL_AGENT=true (OpenAI uses server_vad instead).
-const MODAL_SILENCE_MS = Number(process.env.MODAL_SILENCE_MS || 1200);
-
 const MAX_ROLLING_CHUNKS = 20; // ~1.6 seconds of rolling historical context (4096 bytes per chunk)
 const MAX_CONVERSATION_PCM_BYTES = 50 * 1024 * 1024; // 50 MB cap per call
 const TRIAGE_INTERVAL_MS = Number(process.env.SEVERITY_REEVAL_MS || 10000);
@@ -255,6 +251,9 @@ export function setupSocket(io) {
     let openAiWs = null;
     let activeConversationId = null;
 
+    // Modal agent processing lock — suppresses commits while a response is in flight
+    let agentProcessing = false;
+
     let assistantAudioBuffer = [];
     let userAudioBuffer = [];
     let rollingBuffer = [];
@@ -490,19 +489,6 @@ export function setupSocket(io) {
 
       openAiWs = new WebSocket(agentUrl, { headers: agentHeaders });
 
-      // Silence-based auto-commit for Modal agent (replaces OpenAI's server_vad)
-      let silenceTimer = null;
-      const resetSilenceTimer = () => {
-        if (!USE_MODAL_AGENT) return;
-        clearTimeout(silenceTimer);
-        silenceTimer = setTimeout(() => {
-          if (openAiWs?.readyState === WebSocket.OPEN) {
-            openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-          }
-        }, MODAL_SILENCE_MS);
-      };
-      const clearSilenceTimer = () => clearTimeout(silenceTimer);
-
       openAiWs.on("open", () => {
         console.log(
           `[Socket ${socket.id}] Connected to ${USE_MODAL_AGENT ? "Modal agent" : "OpenAI Realtime API"}`,
@@ -583,6 +569,10 @@ export function setupSocket(io) {
       openAiWs.on("message", (message) => {
         try {
           const event = JSON.parse(message.toString());
+          // Log non-streaming events (skip noisy audio/transcript deltas)
+          if (event.type !== "response.audio.delta" && event.type !== "response.audio_transcript.delta") {
+            console.log(`[Socket ${socket.id}] ← agent: ${event.type}`);
+          }
 
           switch (event.type) {
             case "response.audio.delta":
@@ -649,6 +639,10 @@ export function setupSocket(io) {
               socket.emit("status_update", "Processing...");
               isRecordingUser = false;
               break;
+
+            case "response.done":
+              agentProcessing = false;
+              break;
           }
         } catch (err) {
           console.error("Error handling OpenAI message:", err);
@@ -656,7 +650,7 @@ export function setupSocket(io) {
       });
 
       openAiWs.on("close", () => {
-        clearSilenceTimer();
+        agentProcessing = false;
         console.log(`[Socket ${socket.id}] Agent WebSocket closed`);
         socket.emit("session_stopped");
         stopTriageLoop();
@@ -739,7 +733,6 @@ export function setupSocket(io) {
           audio: buf.toString("base64"),
         }),
       );
-      resetSilenceTimer();
 
       if (isRecordingUser) {
         userAudioBuffer.push(buf);
@@ -751,6 +744,16 @@ export function setupSocket(io) {
       } else {
         rollingBuffer.push(buf);
         if (rollingBuffer.length > MAX_ROLLING_CHUNKS) rollingBuffer.shift();
+      }
+    });
+
+    // Frontend VAD detected end of speech — commit the audio buffer
+    socket.on("commit_audio", () => {
+      if (!USE_MODAL_AGENT || agentProcessing) return;
+      if (openAiWs?.readyState === WebSocket.OPEN) {
+        console.log(`[Socket ${socket.id}] → frontend VAD commit`);
+        openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+        agentProcessing = true;
       }
     });
 

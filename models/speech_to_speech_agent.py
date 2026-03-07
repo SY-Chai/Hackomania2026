@@ -99,41 +99,47 @@ app = modal.App(name="hackomania-speech-agent")
 FIREREDASR_REPO = "https://github.com/FireRedTeam/FireRedASR2S"
 
 # HuggingFace model repos
-HF_VAD_REPO = "FireRedTeam/FireRedVAD"
 HF_LID_REPO = "FireRedTeam/FireRedLID"
 HF_ASR_REPO = "FireRedTeam/FireRedASR2-AED"
 
 # Local model directories (inside the Modal container Volume)
 MODELS_ROOT = "/root/pretrained_models"
-VAD_PARENT  = f"{MODELS_ROOT}/FireRedVAD"   # full HF repo downloaded here
-VAD_DIR     = f"{VAD_PARENT}/VAD"           # sub-folder with actual weights
-LID_DIR     = f"{MODELS_ROOT}/FireRedLID"
-ASR_DIR     = f"{MODELS_ROOT}/FireRedASR2-AED"
+LID_DIR = f"{MODELS_ROOT}/FireRedLID"
+ASR_DIR = f"{MODELS_ROOT}/FireRedASR2-AED"
 
 # Language codes that FireRedASR2 handles natively
-FIRERED_LANGS = frozenset({
-    "en",
-    "zh", "zh-mandarin", "zh-yue", "zh-wu", "zh-min",
-    "zh-north", "zh-xinan", "zh-xiang", "bo",
-})
+FIRERED_LANGS = frozenset(
+    {
+        "en",
+        "zh",
+        "zh-mandarin",
+        "zh-yue",
+        "zh-wu",
+        "zh-min",
+        "zh-north",
+        "zh-xinan",
+        "zh-xiang",
+        "bo",
+    }
+)
 
 # Map FireRedLID codes → ISO 639-1 codes for the OpenAI Whisper API
 WHISPER_LANG_MAP = {
-    "ms": "ms",   # Malay
-    "ta": "ta",   # Tamil
-    "hi": "hi",   # Hindi
-    "id": "id",   # Indonesian
-    "th": "th",   # Thai
-    "vi": "vi",   # Vietnamese
-    "ja": "ja",   # Japanese
-    "ko": "ko",   # Korean
+    "ms": "ms",  # Malay
+    "ta": "ta",  # Tamil
+    "hi": "hi",  # Hindi
+    "id": "id",  # Indonesian
+    "th": "th",  # Thai
+    "vi": "vi",  # Vietnamese
+    "ja": "ja",  # Japanese
+    "ko": "ko",  # Korean
     "fr": "fr",
     "de": "de",
     "es": "es",
 }
 
 # Default OpenAI models
-LLM_MODEL = "gpt-4o-mini"
+LLM_MODEL = "gpt-5-mini"
 TTS_MODEL = "gpt-4o-mini-tts"
 TTS_VOICE = "alloy"
 
@@ -184,12 +190,15 @@ volumes = {MODELS_ROOT: model_vol}
 # Agent class
 # ---------------------------------------------------------------------------
 
+
 @app.cls(
     image=agent_image,
-    gpu="A10G",           # A10G for fast inference; T4 also works
+    gpu="A10G",
+    cpu=2,
+    # memory=32768,  # 32 GB RAM
     volumes=volumes,
     timeout=10 * MINUTES,
-    min_containers=0,
+    min_containers=1,
     secrets=[modal.Secret.from_name("openai-api-key")],
 )
 class SpeechToSpeechAgent:
@@ -201,22 +210,10 @@ class SpeechToSpeechAgent:
 
     @modal.enter()
     def load_models(self):
-        from fireredasr2s.fireredvad.vad import FireRedVad, FireRedVadConfig
-        from fireredasr2s.fireredlid.lid import FireRedLid, FireRedLidConfig
         from fireredasr2s.fireredasr2.asr import FireRedAsr2, FireRedAsr2Config
+        from fireredasr2s.fireredlid.lid import FireRedLid, FireRedLidConfig
         from huggingface_hub import snapshot_download
         from openai import OpenAI
-
-        # ---- FireRedVAD ----
-        if not (Path(VAD_DIR) / "model.pth.tar").exists():
-            print("Downloading FireRedVAD …")
-            snapshot_download(HF_VAD_REPO, local_dir=VAD_PARENT)
-            model_vol.commit()
-        self.vad = FireRedVad.from_pretrained(
-            VAD_DIR,
-            FireRedVadConfig(use_gpu=True, speech_threshold=0.5),
-        )
-        print("FireRedVAD ready.")
 
         # ---- FireRedLID ----
         if not (Path(LID_DIR) / "model.pth.tar").exists():
@@ -270,6 +267,7 @@ class SpeechToSpeechAgent:
     def _normalize_to_16k_mono_wav(wav_bytes: bytes) -> bytes:
         """Resample and downmix to 16 kHz mono WAV if needed."""
         import torchaudio
+
         buf = io.BytesIO(wav_bytes)
         waveform, sr = torchaudio.load(buf)
         if waveform.shape[0] > 1:
@@ -295,65 +293,19 @@ class SpeechToSpeechAgent:
         results = self.lid.process(["utt0"], [wav_path])
         r = results[0] if results else {}
         return {
-            "lang":       r.get("lang", "en"),
+            "lang": r.get("lang", "en"),
             "confidence": float(r.get("confidence", 0.0)),
-            "dur_s":      float(r.get("dur_s", 0.0)),
+            "dur_s": float(r.get("dur_s", 0.0)),
         }
-
-    def _segment_by_vad(self, wav_bytes: bytes) -> list[bytes]:
-        """Run FireRedVAD and return speech-segment WAV blobs."""
-        import torchaudio
-
-        wav_path = self._write_temp_wav(wav_bytes)
-        try:
-            try:
-                segments, _probs = self.vad.detect(wav_path)
-            except Exception as exc:
-                print(f"VAD error ({exc}), using full audio.")
-                return [wav_bytes]
-
-            if not segments:
-                return [wav_bytes]
-
-            buf = io.BytesIO(wav_bytes)
-            waveform, sr = torchaudio.load(buf)
-            if waveform.shape[0] > 1:
-                waveform = waveform.mean(dim=0, keepdim=True)
-            if sr != 16000:
-                waveform = torchaudio.functional.resample(waveform, sr, 16000)
-            sr = 16000
-
-            result: list[bytes] = []
-            for seg in segments:
-                if isinstance(seg[0], float):
-                    start = int(seg[0] * sr)
-                    end   = int(seg[1] * sr)
-                else:
-                    start = int(seg[0]) * 160   # 10 ms frames @ 16 kHz
-                    end   = int(seg[1]) * 160
-
-                clip = waveform[:, start:end]
-                if clip.shape[-1] < 160:
-                    continue
-                out = io.BytesIO()
-                torchaudio.save(out, clip, sr, format="wav")
-                result.append(out.getvalue())
-
-            return result or [wav_bytes]
-        finally:
-            try:
-                os.unlink(wav_path)
-            except OSError:
-                pass
 
     def _run_firered_asr(self, seg_wav_list: list[bytes]) -> str:
         tmp_paths: list[str] = []
         try:
             for wav in seg_wav_list:
                 tmp_paths.append(self._write_temp_wav(wav))
-            uttids  = [f"seg_{i}" for i in range(len(tmp_paths))]
+            uttids = [f"seg_{i}" for i in range(len(tmp_paths))]
             results = self.firered_asr.transcribe(uttids, tmp_paths)
-            texts   = []
+            texts = []
             for r in results:
                 text = r.get("text") or r.get("1best") or r.get("hyp") or ""
                 if text:
@@ -368,10 +320,10 @@ class SpeechToSpeechAgent:
 
     def _run_openai_whisper_asr(self, wav_bytes: bytes, lang: str) -> str:
         whisper_lang = WHISPER_LANG_MAP.get(lang)
-        audio_file   = io.BytesIO(wav_bytes)
+        audio_file = io.BytesIO(wav_bytes)
         audio_file.name = "audio.wav"
         response = self.openai.audio.transcriptions.create(
-            model="whisper-1",
+            model="gpt-4o-transcribe",
             file=audio_file,
             language=whisper_lang,
             response_format="text",
@@ -386,54 +338,98 @@ class SpeechToSpeechAgent:
         wav_path = self._write_temp_wav(wav_norm)
         try:
             lid = self._run_lid(wav_path)
+        except Exception as exc:
+            print(f"[LID] FireRedLID failed ({exc!r}), defaulting to lang='en'")
+            lid = {"lang": "en", "confidence": 0.0}
         finally:
             try:
                 os.unlink(wav_path)
             except OSError:
                 pass
 
-        lang       = lid["lang"]
+        lang = lid["lang"]
         confidence = lid["confidence"]
-        base_lang  = lang.split("-")[0]
+        base_lang = lang.split("-")[0]
 
         if lang in FIRERED_LANGS or base_lang in ("en", "zh"):
-            segs        = self._segment_by_vad(wav_norm)
-            transcript  = self._run_firered_asr(segs)
-            asr_backend = "firered"
+            try:
+                transcript = self._run_firered_asr([wav_norm])
+                asr_backend = "firered"
+            except Exception as exc:
+                print(f"[ASR] FireRedASR2 failed ({exc!r}), falling back to Whisper")
+                transcript = self._run_openai_whisper_asr(wav_norm, lang)
+                asr_backend = "openai-whisper-fallback"
         else:
-            transcript  = self._run_openai_whisper_asr(wav_norm, lang)
+            transcript = self._run_openai_whisper_asr(wav_norm, lang)
             asr_backend = "openai-whisper"
 
         return transcript, lang, asr_backend, confidence
 
-    def _stream_llm(self, transcript: str, lang: str, system_prompt: str | None):
+    LANG_LABELS = {
+        "en": "English",
+        "zh": "Mandarin Chinese",
+        "zh-mandarin": "Mandarin Chinese",
+        "zh-yue": "Cantonese",
+        "zh-wu": "Shanghainese Wu Chinese",
+        "zh-min": "Min Chinese",
+        "ms": "Malay",
+        "ta": "Tamil",
+        "hi": "Hindi",
+        "id": "Indonesian",
+        "th": "Thai",
+        "vi": "Vietnamese",
+        "ja": "Japanese",
+        "ko": "Korean",
+    }
+
+    def _stream_llm(
+        self,
+        history: list[dict],
+        lang: str,
+        lang_counts: dict[str, int],
+        system_prompt: str | None,
+    ):
         """
         Yield (delta_text, full_text_so_far) as the LLM streams tokens.
         Last yield has delta="" and full_text_so_far = complete response.
+
+        ``history`` is the full conversation so far (user + assistant turns).
+        ``lang_counts`` tracks how many times each language has been detected.
         """
-        lang_labels = {
-            "en": "English",
-            "zh": "Mandarin Chinese", "zh-mandarin": "Mandarin Chinese",
-            "zh-yue": "Cantonese",    "zh-wu": "Shanghainese Wu Chinese",
-            "zh-min": "Min Chinese",
-            "ms": "Malay",
-            "ta": "Tamil",
-            "hi": "Hindi",
-        }
-        lang_label = lang_labels.get(lang, lang.upper())
+        lang_label = self.LANG_LABELS.get(lang, lang.upper())
+
+        # Build a language summary from aggregate detections
+        if lang_counts:
+            sorted_langs = sorted(lang_counts.items(), key=lambda x: -x[1])
+            lang_summary = ", ".join(
+                f"{self.LANG_LABELS.get(l, l.upper())} ({n}x)" for l, n in sorted_langs
+            )
+        else:
+            lang_summary = lang_label
+
         default_system = (
             "You are a calm, empathetic voice assistant for an emergency response "
             "service. You help callers—primarily elderly individuals—with urgent "
-            "situations. Keep responses concise, clear, and reassuring. "
-            f"The caller is speaking {lang_label}; always reply in the same language."
+            "situations. Keep responses concise, clear, and reassuring."
+        )
+        lang_directive = (
+            f"\n\nDetected language for the latest utterance: {lang_label}.\n"
+            f"Language detection history across the conversation: {lang_summary}.\n"
+            "Always reply in the caller's most likely language based on the above."
         )
         messages = [
-            {"role": "system", "content": system_prompt or default_system},
-            {"role": "user",   "content": transcript},
+            {
+                "role": "system",
+                "content": (system_prompt or default_system) + lang_directive,
+            },
+            *history,
         ]
-        stream    = self.openai.chat.completions.create(
-            model=LLM_MODEL, messages=messages,
-            max_tokens=300, temperature=0.7, stream=True,
+        stream = self.openai.chat.completions.create(
+            model=LLM_MODEL,
+            messages=messages,
+            max_tokens=300,
+            temperature=0.7,
+            stream=True,
         )
         full_text = ""
         for chunk in stream:
@@ -449,14 +445,17 @@ class SpeechToSpeechAgent:
             model=TTS_MODEL,
             voice=voice,
             input=text,
-            response_format="pcm",   # raw 24 kHz signed-16-bit PCM
+            response_format="pcm",  # raw 24 kHz signed-16-bit PCM
         ) as resp:
             yield from resp.iter_bytes(chunk_size=4096)
 
     def _run_tts(self, text: str, voice: str = TTS_VOICE) -> bytes:
         """Non-streaming TTS, returns full MP3 bytes (used by REST endpoints)."""
         return self.openai.audio.speech.create(
-            model=TTS_MODEL, voice=voice, input=text, response_format="mp3",
+            model=TTS_MODEL,
+            voice=voice,
+            input=text,
+            response_format="mp3",
         ).content
 
     # ------------------------------------------------------------------
@@ -469,31 +468,36 @@ class SpeechToSpeechAgent:
         system_prompt: str | None = None,
         tts_voice: str = TTS_VOICE,
     ) -> dict:
-        t0       = time.time()
+        t0 = time.time()
         wav_norm = self._normalize_to_16k_mono_wav(wav_bytes)
 
         transcript, lang, asr_backend, confidence = self._run_asr(wav_norm)
-        print(f"[LID] lang={lang!r} conf={confidence:.3f}  [ASR] {asr_backend}: {transcript!r}")
+        print(
+            f"[LID] lang={lang!r} conf={confidence:.3f}  [ASR] {asr_backend}: {transcript!r}"
+        )
 
         # Collect full LLM response (non-streaming for REST)
+        base_lang = lang.split("-")[0]
+        lang_counts = {base_lang: 1}
+        history = [{"role": "user", "content": transcript}]
         llm_response = ""
-        for _delta, full in self._stream_llm(transcript, lang, system_prompt):
+        for _delta, full in self._stream_llm(history, lang, lang_counts, system_prompt):
             llm_response = full
         print(f"[LLM] {llm_response!r}")
 
-        tts_audio   = self._run_tts(llm_response, voice=tts_voice)
-        audio_b64   = base64.b64encode(tts_audio).decode()
+        tts_audio = self._run_tts(llm_response, voice=tts_voice)
+        audio_b64 = base64.b64encode(tts_audio).decode()
         duration_ms = int((time.time() - t0) * 1000)
         print(f"[TTS] done | total={duration_ms} ms")
 
         return {
-            "transcript":   transcript,
-            "lang":         lang,
-            "confidence":   confidence,
-            "asr_backend":  asr_backend,
+            "transcript": transcript,
+            "lang": lang,
+            "confidence": confidence,
+            "asr_backend": asr_backend,
             "llm_response": llm_response,
-            "audio_b64":    audio_b64,
-            "duration_ms":  duration_ms,
+            "audio_b64": audio_b64,
+            "duration_ms": duration_ms,
         }
 
     # ------------------------------------------------------------------
@@ -528,7 +532,16 @@ class SpeechToSpeechAgent:
     @modal.asgi_app()
     def api(self):
         import asyncio
-        from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+
+        from fastapi import (
+            FastAPI,
+            File,
+            Form,
+            HTTPException,
+            UploadFile,
+            WebSocket,
+            WebSocketDisconnect,
+        )
         from fastapi.responses import JSONResponse, Response
         from pydantic import BaseModel
 
@@ -544,12 +557,12 @@ class SpeechToSpeechAgent:
             return {
                 "status": "ok",
                 "models": {
-                    "vad":          "FireRedVAD",
-                    "lid":          "FireRedLID",
-                    "asr_primary":  "FireRedASR2-AED (en, zh)",
+                    "vad": "FireRedVAD",
+                    "lid": "FireRedLID",
+                    "asr_primary": "FireRedASR2-AED (en, zh)",
                     "asr_fallback": "OpenAI Whisper API (ms, ta, hi, …)",
-                    "llm":          LLM_MODEL,
-                    "tts":          TTS_MODEL,
+                    "llm": LLM_MODEL,
+                    "tts": TTS_MODEL,
                 },
             }
 
@@ -570,7 +583,7 @@ class SpeechToSpeechAgent:
         # ── REST: /process/base64 ──────────────────────────────────────
         class Base64Request(BaseModel):
             audio_b64: str
-            format: str = "wav"           # "wav" | "pcm16"
+            format: str = "wav"  # "wav" | "pcm16"
             sample_rate: int = 16000
             channels: int = 1
             system_prompt: str | None = None
@@ -589,7 +602,9 @@ class SpeechToSpeechAgent:
                     raw, req.sample_rate, req.channels
                 )
             else:
-                raise HTTPException(status_code=400, detail="format must be 'wav' or 'pcm16'")
+                raise HTTPException(
+                    status_code=400, detail="format must be 'wav' or 'pcm16'"
+                )
             try:
                 result = self._process(wav_bytes, req.system_prompt, req.tts_voice)
             except Exception as exc:
@@ -613,12 +628,12 @@ class SpeechToSpeechAgent:
                 content=mp3_bytes,
                 media_type="audio/mpeg",
                 headers={
-                    "X-Transcript":   result["transcript"],
-                    "X-Lang":         result["lang"],
-                    "X-Confidence":   str(result["confidence"]),
-                    "X-ASR-Backend":  result["asr_backend"],
+                    "X-Transcript": result["transcript"],
+                    "X-Lang": result["lang"],
+                    "X-Confidence": str(result["confidence"]),
+                    "X-ASR-Backend": result["asr_backend"],
                     "X-LLM-Response": result["llm_response"],
-                    "X-Duration-Ms":  str(result["duration_ms"]),
+                    "X-Duration-Ms": str(result["duration_ms"]),
                 },
             )
 
@@ -638,27 +653,31 @@ class SpeechToSpeechAgent:
             """
             await ws.accept()
 
-            session_id    = str(uuid.uuid4())
+            session_id = str(uuid.uuid4())
             session_voice = TTS_VOICE
             session_prompt: str | None = None
-            audio_buffer   = bytearray()   # accumulates PCM16 chunks
-            loop           = asyncio.get_event_loop()
+            audio_buffer = bytearray()  # accumulates PCM16 chunks
+            loop = asyncio.get_event_loop()
+            conversation_history: list[dict] = []  # multi-turn messages
+            lang_counts: dict[str, int] = {}  # aggregate language detections
 
             # Helper: send a JSON event
             async def send(event: dict):
                 await ws.send_json(event)
 
-            await send({
-                "type": "session.created",
-                "session": {
-                    "id":           session_id,
-                    "voice":        session_voice,
-                    "model":        LLM_MODEL,
-                    "tts_model":    TTS_MODEL,
-                    "input_audio_format":  "pcm16",
-                    "output_audio_format": "pcm",
-                },
-            })
+            await send(
+                {
+                    "type": "session.created",
+                    "session": {
+                        "id": session_id,
+                        "voice": session_voice,
+                        "model": LLM_MODEL,
+                        "tts_model": TTS_MODEL,
+                        "input_audio_format": "pcm16_24khz",
+                        "output_audio_format": "pcm",
+                    },
+                }
+            )
 
             try:
                 while True:
@@ -672,9 +691,15 @@ class SpeechToSpeechAgent:
                             session_voice = sess["voice"]
                         if "system_prompt" in sess:
                             session_prompt = sess["system_prompt"]
-                        await send({"type": "session.updated", "session": {
-                            "id": session_id, "voice": session_voice,
-                        }})
+                        await send(
+                            {
+                                "type": "session.updated",
+                                "session": {
+                                    "id": session_id,
+                                    "voice": session_voice,
+                                },
+                            }
+                        )
 
                     # ── input_audio_buffer.append ──────────────────────
                     elif event_type == "input_audio_buffer.append":
@@ -690,86 +715,163 @@ class SpeechToSpeechAgent:
                     # ── input_audio_buffer.commit ──────────────────────
                     elif event_type == "input_audio_buffer.commit":
                         if not audio_buffer:
-                            await send({"type": "error", "error": {
-                                "message": "Audio buffer is empty."
-                            }})
+                            await send(
+                                {
+                                    "type": "error",
+                                    "error": {"message": "Audio buffer is empty."},
+                                }
+                            )
                             continue
 
                         await send({"type": "input_audio_buffer.committed"})
                         t0 = time.time()
 
-                        # Convert buffered PCM16 → 16 kHz mono WAV
+                        # Convert buffered PCM16 → WAV (client sends 24 kHz; normalise will resample to 16 kHz)
                         pcm_snapshot = bytes(audio_buffer)
                         audio_buffer.clear()
-                        wav_bytes = SpeechToSpeechAgent._pcm16_to_wav_bytes(pcm_snapshot)
+                        wav_bytes = SpeechToSpeechAgent._pcm16_to_wav_bytes(
+                            pcm_snapshot, sample_rate=24000
+                        )
 
-                        # VAD + LID + ASR  (blocking — run in thread pool)
+                        # LID + ASR  (blocking — run in thread pool; skip VAD since frontend handles it)
                         await send({"type": "input_audio_buffer.speech_started"})
                         try:
-                            wav_norm                           = await loop.run_in_executor(
+                            wav_norm = await loop.run_in_executor(
                                 None, self._normalize_to_16k_mono_wav, wav_bytes
                             )
-                            transcript, lang, asr_backend, conf = await loop.run_in_executor(
+                            (
+                                transcript,
+                                lang,
+                                asr_backend,
+                                conf,
+                            ) = await loop.run_in_executor(
                                 None, self._run_asr, wav_norm
                             )
                         except Exception as exc:
-                            await send({"type": "error", "error": {"message": str(exc)}})
+                            await send(
+                                {"type": "error", "error": {"message": str(exc)}}
+                            )
                             continue
 
                         await send({"type": "input_audio_buffer.speech_stopped"})
-                        await send({
-                            "type": "conversation.item.created",
-                            "item": {
-                                "role": "user",
-                                "content": [{
-                                    "type":        "input_audio",
-                                    "transcript":  transcript,
-                                    "lang":        lang,
-                                    "confidence":  conf,
-                                    "asr_backend": asr_backend,
-                                }],
-                            },
-                        })
+                        await send(
+                            {
+                                "type": "conversation.item.created",
+                                "item": {
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "input_audio",
+                                            "transcript": transcript,
+                                            "lang": lang,
+                                            "confidence": conf,
+                                            "asr_backend": asr_backend,
+                                        }
+                                    ],
+                                },
+                            }
+                        )
                         await send({"type": "response.created"})
 
-                        # Stream LLM response text
+                        # Track language detections across the session
+                        base_lang = lang.split("-")[0]
+                        lang_counts[base_lang] = lang_counts.get(base_lang, 0) + 1
+
+                        # Append user turn to conversation history
+                        conversation_history.append(
+                            {"role": "user", "content": transcript}
+                        )
+
+                        # Stream LLM via queue so text arrives in real-time
+                        hist_snapshot = list(conversation_history)
+                        lc_snapshot = dict(lang_counts)
+                        llm_queue: asyncio.Queue = asyncio.Queue()
+
+                        def _produce_llm():
+                            full = ""
+                            for d, f in self._stream_llm(
+                                hist_snapshot, lang, lc_snapshot, session_prompt
+                            ):
+                                if d:
+                                    loop.call_soon_threadsafe(llm_queue.put_nowait, ("delta", d))
+                                full = f
+                            loop.call_soon_threadsafe(llm_queue.put_nowait, ("done", full))
+
+                        llm_task = loop.run_in_executor(None, _produce_llm)
+
                         llm_full = ""
-                        for delta, full in self._stream_llm(transcript, lang, session_prompt):
-                            if delta:
-                                await send({
-                                    "type":  "response.audio_transcript.delta",
-                                    "delta": delta,
-                                })
-                            llm_full = full
+                        while True:
+                            kind, value = await llm_queue.get()
+                            if kind == "done":
+                                llm_full = value
+                                break
+                            await send(
+                                {
+                                    "type": "response.audio_transcript.delta",
+                                    "delta": value,
+                                }
+                            )
 
-                        await send({
-                            "type":       "response.audio_transcript.done",
-                            "transcript": llm_full,
-                        })
+                        await llm_task
 
-                        # Stream TTS audio (raw 24 kHz PCM chunks)
-                        for pcm_chunk in self._stream_tts(llm_full, voice=session_voice):
-                            await send({
-                                "type":  "response.audio.delta",
-                                "delta": base64.b64encode(pcm_chunk).decode(),
-                            })
+                        await send(
+                            {
+                                "type": "response.audio_transcript.done",
+                                "transcript": llm_full,
+                            }
+                        )
+
+                        # Append assistant turn to conversation history
+                        conversation_history.append(
+                            {"role": "assistant", "content": llm_full}
+                        )
+
+                        # Stream TTS via queue so audio plays as it's generated
+                        tts_queue: asyncio.Queue = asyncio.Queue()
+
+                        def _produce_tts():
+                            for pcm_chunk in self._stream_tts(llm_full, voice=session_voice):
+                                loop.call_soon_threadsafe(tts_queue.put_nowait, pcm_chunk)
+                            loop.call_soon_threadsafe(tts_queue.put_nowait, None)  # sentinel
+
+                        tts_task = loop.run_in_executor(None, _produce_tts)
+
+                        while True:
+                            pcm_chunk = await tts_queue.get()
+                            if pcm_chunk is None:
+                                break
+                            await send(
+                                {
+                                    "type": "response.audio.delta",
+                                    "delta": base64.b64encode(pcm_chunk).decode(),
+                                }
+                            )
+
+                        await tts_task  # ensure thread finished cleanly
 
                         await send({"type": "response.audio.done"})
-                        await send({
-                            "type": "response.done",
-                            "response": {
-                                "transcript":  transcript,
-                                "lang":        lang,
-                                "asr_backend": asr_backend,
-                                "llm_response": llm_full,
-                                "duration_ms": int((time.time() - t0) * 1000),
-                            },
-                        })
+                        await send(
+                            {
+                                "type": "response.done",
+                                "response": {
+                                    "transcript": transcript,
+                                    "lang": lang,
+                                    "asr_backend": asr_backend,
+                                    "llm_response": llm_full,
+                                    "duration_ms": int((time.time() - t0) * 1000),
+                                },
+                            }
+                        )
 
                     else:
-                        await send({"type": "error", "error": {
-                            "message": f"Unknown event type: {event_type!r}"
-                        }})
+                        await send(
+                            {
+                                "type": "error",
+                                "error": {
+                                    "message": f"Unknown event type: {event_type!r}"
+                                },
+                            }
+                        )
 
             except WebSocketDisconnect:
                 pass
@@ -786,11 +888,12 @@ class SpeechToSpeechAgent:
 # Local test entrypoint
 # ---------------------------------------------------------------------------
 
+
 @app.local_entrypoint()
 def test(audio_path: str = ""):
     """
-      modal run models/speech_to_speech_agent.py
-      modal run models/speech_to_speech_agent.py --audio-path /tmp/hello.wav
+    modal run models/speech_to_speech_agent.py
+    modal run models/speech_to_speech_agent.py --audio-path /tmp/hello.wav
     """
     import struct
 

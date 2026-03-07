@@ -44,6 +44,53 @@ export function resampleTo24k(input: Float32Array, inputSampleRate: number): Int
   return float32ToInt16(result);
 }
 
+// ---------------------------------------------------------------------------
+// Simple energy-based VAD for gating mic audio before sending to the backend.
+// Returns true when the chunk likely contains speech.
+// ---------------------------------------------------------------------------
+const VAD_SPEECH_THRESHOLD = 0.01; // float32 RMS threshold
+const VAD_SILENCE_FRAMES = 8;     // ~750 ms at 4096-sample frames @ 48 kHz
+
+let vadSpeechActive = false;
+let vadSilenceCount = 0;
+
+export function resetVadState(): void {
+  vadSpeechActive = false;
+  vadSilenceCount = 0;
+}
+
+/**
+ * Returns "speech" | "silence_after_speech" | "silence".
+ * - "speech": audio contains speech, should be sent
+ * - "silence_after_speech": speech just ended, send a commit signal
+ * - "silence": no speech, skip sending
+ */
+export function classifyChunk(float32: Float32Array): "speech" | "silence_after_speech" | "silence" {
+  // Compute RMS energy
+  let sum = 0;
+  for (let i = 0; i < float32.length; i++) sum += float32[i] * float32[i];
+  const rms = Math.sqrt(sum / float32.length);
+
+  if (rms > VAD_SPEECH_THRESHOLD) {
+    vadSpeechActive = true;
+    vadSilenceCount = 0;
+    return "speech";
+  }
+
+  if (vadSpeechActive) {
+    vadSilenceCount++;
+    if (vadSilenceCount >= VAD_SILENCE_FRAMES) {
+      vadSpeechActive = false;
+      vadSilenceCount = 0;
+      return "silence_after_speech";
+    }
+    // Still within the grace period — keep sending (captures trailing audio)
+    return "speech";
+  }
+
+  return "silence";
+}
+
 export function schedulePcm16Playback(
   ctx: AudioContext | null,
   nextPlaybackTimeRef: { current: number },
