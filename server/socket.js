@@ -297,7 +297,19 @@ export function setupSocket(io) {
 
     socket.on("start_emergency_session", async (data) => {
       const pabId = data?.pab_id || null; // Will fallback to null if not provided
-      
+
+      let agentUserId = process.env.AGENT_ID || null;
+      if (!agentUserId && supabase) {
+        const { data: agentData, error: agentErr } = await supabase
+          .from("users")
+          .select("id")
+          .eq("author_type", "agent")
+          .limit(1)
+          .single();
+        if (agentErr) console.error(`❌ Failed to fetch agent user:`, agentErr);
+        if (agentData?.id) agentUserId = agentData.id;
+      }
+
       if (openAiWs) {
         console.log(`[Socket ${socket.id}] WebSocket already exists.`);
         return;
@@ -390,7 +402,7 @@ export function setupSocket(io) {
           
           let authorIdToSave = null;
           if (role === "agent") {
-            authorIdToSave = process.env.AGENT_ID;
+            authorIdToSave = agentUserId;
           } else if (role === "user") {
             const session = liveConversationSessions.get(activeConversationId);
             authorIdToSave = session?.pabId || null;

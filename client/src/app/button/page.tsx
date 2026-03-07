@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, Suspense } from "react";
 import { AlertCircle, Loader2, Mic, PhoneOff } from "lucide-react";
 import { io, Socket } from "socket.io-client";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { resolveSocketServerUrl } from "@/lib/socket";
@@ -18,12 +18,26 @@ type ChatMessage = {
 // Extracted inner component to use useSearchParams
 function ButtonPageContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [pabId, setPabId] = useState<string | null>(null);
 
   useEffect(() => {
     const param = searchParams.get("pab_id");
-    if (param) setPabId(param);
-  }, [searchParams]);
+    if (param) {
+      setPabId(param);
+      return;
+    }
+    // No pab_id in URL — fetch a default PAB ID and reflect it in the URL
+    fetch("/api/pab-default")
+      .then((r) => r.json())
+      .then((data: { id: string | null }) => {
+        if (data.id) {
+          setPabId(data.id);
+          router.replace(`?pab_id=${data.id}`);
+        }
+      })
+      .catch(() => {});
+  }, [searchParams, router]);
 
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -315,7 +329,7 @@ function ButtonPageContent() {
 
           <Button
             onClick={isConnected ? stopConversation : startConversation}
-            disabled={isConnecting}
+            disabled={isConnecting || (!isConnected && !pabId)}
             className="h-44 w-44 rounded-full border-0 bg-red-600 text-lg font-semibold text-white shadow-[0_0_80px_rgba(239,68,68,0.22)] transition hover:bg-red-500 focus-visible:ring-red-400/50 disabled:opacity-70"
           >
             {isConnecting ? (
