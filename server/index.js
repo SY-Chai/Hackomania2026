@@ -55,17 +55,47 @@ app.get('/health', (req, res) => {
 app.post('/api/conversations', async (req, res) => {
   if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
 
-  // Assuming `Conversations` table just stores timestamps (and an auto-generated id)
+  // Optional fields for triage (agent/operator) and classification (non-urgent/uncertain/urgent)
+  const { triage, classification, timestamp } = req.body || {};
+
   const { data, error } = await supabase
-    .from('conversations') // Change to 'Conversations' if your table is title-cased
-    .insert([{ timestamp: new Date().toISOString() }])
+    .from('conversations') 
+    .insert([{ 
+      timestamp: timestamp || new Date().toISOString(),
+      triage: triage || 'agent', // Default to agent if not provided
+      classification: classification || 'uncertain' // Default to uncertain if not provided
+    }])
     .select();
 
   if (error) return res.status(400).json({ error: error.message });
   res.json(data[0]);
 });
 
-// 2) Save a Message
+// 2) Update a Conversation (e.g., when an AI model finishes classifying it)
+app.patch('/api/conversations/:id', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  const { id } = req.params;
+  const { triage, classification } = req.body;
+
+  const updates = {};
+  if (triage) updates.triage = triage;
+  if (classification) updates.classification = classification;
+
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: 'No valid fields to update' });
+  }
+
+  const { data, error } = await supabase
+    .from('conversations')
+    .update(updates)
+    .eq('id', id)
+    .select();
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(data[0]);
+});
+
+// 3) Save a Message
 app.post('/api/messages', async (req, res) => {
   if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
 
