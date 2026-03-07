@@ -139,9 +139,9 @@ WHISPER_LANG_MAP = {
 }
 
 # Default OpenAI models
-LLM_MODEL = "gpt-5-mini"
+LLM_MODEL = "gpt-5.4"
 TTS_MODEL = "gpt-4o-mini-tts"
-TTS_VOICE = "alloy"
+TTS_VOICE = "sage"
 
 MINUTES = 60
 
@@ -193,9 +193,9 @@ volumes = {MODELS_ROOT: model_vol}
 
 @app.cls(
     image=agent_image,
-    gpu="A10G",
-    cpu=2,
-    # memory=32768,  # 32 GB RAM
+    gpu="T4",
+    cpu=4,
+    memory=16384,  # 32 GB RAM
     volumes=volumes,
     timeout=10 * MINUTES,
     min_containers=1,
@@ -427,7 +427,6 @@ class SpeechToSpeechAgent:
         stream = self.openai.chat.completions.create(
             model=LLM_MODEL,
             messages=messages,
-            temperature=0.3,
             stream=True,
         )
         full_text = ""

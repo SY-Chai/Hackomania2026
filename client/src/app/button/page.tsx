@@ -7,12 +7,19 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { resolveSocketServerUrl } from "@/lib/socket";
-import { resampleTo24k, schedulePcm16Playback, classifyChunk, resetVadState } from "@/lib/audio";
+import { float32ToPcm16Buffer, schedulePcm16Playback } from "@/lib/audio";
 
 type ChatMessage = {
   id: string;
   role: "pab" | "user" | "operator" | "agent" | "system";
   text: string;
+};
+
+type MicVADInstance = {
+  start: () => Promise<void>;
+  pause: () => Promise<void>;
+  destroy: () => Promise<void>;
+  listening: boolean;
 };
 
 // Extracted inner component to use useSearchParams
@@ -50,12 +57,9 @@ function ButtonPageContent() {
   const [error, setError] = useState<string | null>(null);
 
   const socketRef = useRef<Socket | null>(null);
+  const vadRef = useRef<MicVADInstance | null>(null);
 
-  const inputAudioContextRef = useRef<AudioContext | null>(null);
   const playbackAudioContextRef = useRef<AudioContext | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const nextPlaybackTimeRef = useRef(0);
 
   const stopPlaybackLoop = useCallback(() => {
@@ -70,23 +74,12 @@ function ButtonPageContent() {
     );
   }, []);
 
-  const stopMicrophoneCapture = useCallback(() => {
-    resetVadState();
-    try {
-      processorRef.current?.disconnect();
-      sourceRef.current?.disconnect();
-      processorRef.current = null;
-      sourceRef.current = null;
-    } catch {}
-
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-    }
-
-    if (inputAudioContextRef.current) {
-      inputAudioContextRef.current.close().catch(() => {});
-      inputAudioContextRef.current = null;
+  const stopMicrophoneCapture = useCallback(async () => {
+    if (vadRef.current) {
+      try {
+        await vadRef.current.destroy();
+      } catch {}
+      vadRef.current = null;
     }
   }, []);
 
@@ -115,55 +108,53 @@ function ButtonPageContent() {
 
   const startMicrophoneCapture = useCallback(
     async (socket: Socket) => {
-      console.log("🎤 WS DEBUG: requesting microphone");
+      console.log("🎤 WS DEBUG: initializing Silero VAD");
 
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            noiseSuppression: true,
-            echoCancellation: true,
-            autoGainControl: true,
-            channelCount: 1,
+        const { MicVAD } = await import("@ricky0123/vad-web");
+
+        const vad = await MicVAD.new({
+          model: "v5",
+          baseAssetPath: "/vad/",
+          onnxWASMBasePath: "/vad/",
+
+          // VAD tuning
+          positiveSpeechThreshold: 0.5,
+          negativeSpeechThreshold: 0.35,
+          redemptionMs: 900,       // ~900ms grace period before ending speech
+          minSpeechMs: 500,        // minimum 500ms of speech required
+          preSpeechPadMs: 300,     // include 300ms before speech start
+
+          onSpeechStart: () => {
+            console.log("🎤 VAD: speech started");
           },
+
+          onSpeechRealStart: () => {
+            console.log("🎤 VAD: speech confirmed (past minSpeechMs)");
+          },
+
+          onSpeechEnd: (audio: Float32Array) => {
+            // audio is Float32Array at 16kHz from Silero VAD
+            console.log(`🎤 VAD: speech ended, ${audio.length} samples (${(audio.length / 16000).toFixed(1)}s)`);
+
+            // Resample 16kHz → 24kHz PCM16 and send
+            const pcmBuffer = float32ToPcm16Buffer(audio, 16000);
+            socket.emit("client_audio", pcmBuffer);
+            socket.emit("commit_audio");
+          },
+
+          onVADMisfire: () => {
+            console.log("🎤 VAD: misfire (speech too short, discarded)");
+          },
+
+          onFrameProcessed: () => {},
         });
 
-        mediaStreamRef.current = stream;
-
-        const audioContext = new AudioContext();
-        inputAudioContextRef.current = audioContext;
-
-        const source = audioContext.createMediaStreamSource(stream);
-        sourceRef.current = source;
-
-        const processor = audioContext.createScriptProcessor(4096, 1, 1);
-        processorRef.current = processor;
-
-        source.connect(processor);
-        processor.connect(audioContext.destination);
-
-        processor.onaudioprocess = (event) => {
-          const input = event.inputBuffer.getChannelData(0);
-          const copied = new Float32Array(input);
-          const vadResult = classifyChunk(copied);
-
-          if (vadResult === "speech") {
-            const pcm16 = resampleTo24k(copied, audioContext.sampleRate);
-            socket.emit("client_audio", pcm16.buffer);
-          } else if (vadResult === "silence_after_speech") {
-            // Send any trailing audio then signal commit
-            const pcm16 = resampleTo24k(copied, audioContext.sampleRate);
-            socket.emit("client_audio", pcm16.buffer);
-            socket.emit("commit_audio");
-          }
-          // "silence" → skip, don't send
-        };
-
-        console.log(
-          "🎤 WS DEBUG: microphone streaming started at",
-          audioContext.sampleRate,
-        );
+        await vad.start();
+        vadRef.current = vad;
+        console.log("🎤 WS DEBUG: Silero VAD started");
       } catch (err) {
-        console.error("Microphone access denied:", err);
+        console.error("Microphone access denied or VAD init failed:", err);
         setError(
           "Microphone access is required to use the emergency voice assistant.",
         );
