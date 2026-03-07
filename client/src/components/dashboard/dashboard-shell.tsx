@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { io as socketIO } from "socket.io-client";
+import { io } from "socket.io-client";
 import { MapPin, Phone, AlertTriangle, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConversationsView, type UIConversation } from "./conversations-view";
@@ -39,7 +39,7 @@ export function DashboardShell({
 
   useEffect(() => {
     // Connect to the Node backend listening on port 3001
-    const socket = socketIO(resolveSocketServerUrl());
+    const socket = io(resolveSocketServerUrl());
 
     socket.on("dashboard_update", () => {
       console.log("Dashboard update received, refreshing data...");
@@ -119,7 +119,9 @@ export function DashboardShell({
       <div
         onMouseDown={onSeparatorMouseDown}
         onClick={onSeparatorClick}
-        title={collapsed ? "Click to expand" : "Drag to resize · Click to collapse"}
+        title={
+          collapsed ? "Click to expand" : "Drag to resize · Click to collapse"
+        }
         className={cn(
           "relative w-2 shrink-0 cursor-col-resize flex items-center justify-center group z-10",
           "bg-slate-200 hover:bg-slate-300 active:bg-slate-400 transition-colors duration-100",
