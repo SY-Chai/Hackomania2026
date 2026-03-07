@@ -604,7 +604,8 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const isListeningSelected = listenTargetId === selected.id;
   const isTakeoverSelected = takeoverConversationId === selected.id;
   const isTakeoverPending = pendingTakeoverConversationId === selected.id;
-  const isSelectedOngoing = isConversationOngoing(selected.classification);
+  const isSelectedOngoing =
+    isConversationOngoing(selected.classification) && selected.pabId !== null;
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
@@ -615,9 +616,6 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
             <h1 className="text-sm font-semibold text-slate-900">
               Conversations
             </h1>
-            <p className="text-xs text-slate-500 mt-0.5">
-              {liveConversations.length} total
-            </p>
           </div>
           {onCollapse && (
             <button
