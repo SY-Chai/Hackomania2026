@@ -3,6 +3,8 @@ import { DashboardShell } from "@/components/dashboard/dashboard-shell";
 import { fetchConversationsWithMessages } from "@/lib/supabase";
 import { toUIConversations, isOngoing } from "@/lib/dashboard-utils";
 
+export const dynamic = "force-dynamic";
+
 async function DashboardContent() {
   const rawConversations = await fetchConversationsWithMessages();
   const ongoing = rawConversations.filter(isOngoing);
