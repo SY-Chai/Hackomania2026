@@ -1,5 +1,56 @@
-import { redirect } from "next/navigation";
+import { DashboardShell } from "@/components/dashboard/dashboard-shell";
+import {
+  fetchPABs,
+  fetchConversations,
+  fetchConversationsWithMessages,
+} from "@/lib/supabase";
+import {
+  toUIConversations,
+  toPABMarkers,
+  isOngoing,
+} from "@/lib/dashboard-utils";
 
-export default function DashboardPage() {
-  redirect("/dashboard/map");
+export default async function DashboardPage() {
+  let pabs: Awaited<ReturnType<typeof fetchPABs>> = [];
+  let rawConversations: Awaited<
+    ReturnType<typeof fetchConversationsWithMessages>
+  > = [];
+  let allConversations: Awaited<ReturnType<typeof fetchConversations>> = [];
+
+  try {
+    [pabs, rawConversations, allConversations] = await Promise.all([
+      fetchPABs(),
+      fetchConversationsWithMessages(),
+      fetchConversations(),
+    ]);
+  } catch {
+    try {
+      pabs = await fetchPABs();
+    } catch {
+      /* empty */
+    }
+    try {
+      rawConversations = await fetchConversationsWithMessages();
+    } catch {
+      /* empty */
+    }
+    try {
+      allConversations = await fetchConversations();
+    } catch {
+      /* empty */
+    }
+  }
+
+  const ongoing = allConversations.filter(isOngoing);
+
+  return (
+    <DashboardShell
+      conversations={toUIConversations(rawConversations)}
+      mapPABs={toPABMarkers(pabs, ongoing)}
+      stationary={
+        pabs.filter((p) => p.latitude != null && p.longitude != null).length
+      }
+      ongoing={ongoing.length}
+    />
+  );
 }
