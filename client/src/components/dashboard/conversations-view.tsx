@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -36,6 +35,9 @@ export interface UIConversation {
   id: string;
   phase: "triage" | "diagnosis";
   classification: string | null;
+  severity: "urgent" | "uncertain" | "non_urgent" | null;
+  severityConf: number | null;
+  severityReason: string | null;
   startedAt: string | null;
   lastActivity: string | null;
   messages: UIMessage[];
@@ -98,6 +100,35 @@ type TakeoverEvent = {
   conversationId: string;
   operatorSocketId?: string;
 };
+type SeverityUpdateEvent = {
+  conversationId: string;
+  severity: "urgent" | "uncertain" | "non_urgent";
+  severity_conf?: number | null;
+  severity_reason?: string | null;
+  updatedAt?: string;
+};
+
+const severityConfig = {
+  urgent: {
+    label: "Urgent",
+    className: "bg-red-50 text-red-700 border-red-200",
+  },
+  uncertain: {
+    label: "Uncertain",
+    className: "bg-amber-50 text-amber-700 border-amber-200",
+  },
+  non_urgent: {
+    label: "Non-urgent",
+    className: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  },
+} as const;
+
+function getSeverityRank(severity: UIConversation["severity"]) {
+  if (severity === "urgent") return 0;
+  if (severity === "uncertain") return 1;
+  if (severity === "non_urgent") return 2;
+  return 3;
+}
 
 const SOCKET_SERVER_URL =
   process.env.NEXT_PUBLIC_SOCKET_SERVER_URL;
@@ -165,6 +196,7 @@ interface Props {
 }
 
 export function ConversationsView({ conversations, onCollapse }: Props) {
+  const [liveConversations, setLiveConversations] = useState(conversations);
   const [filter, setFilter] = useState<FilterTab>("all");
   const [selectedId, setSelectedId] = useState<string | null>(
     conversations[0]?.id ?? null,
@@ -188,7 +220,9 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const selected =
-    conversations.find((conv) => conv.id === selectedId) ?? conversations[0] ?? null;
+    liveConversations.find((conv) => conv.id === selectedId) ??
+    liveConversations[0] ??
+    null;
 
   const stopOperatorMicrophoneCapture = useCallback(() => {
     try {
@@ -278,6 +312,45 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
     source.start(startTime);
     nextPlaybackTimeRef.current = startTime + audioBuffer.duration;
+  }, []);
+
+  useEffect(() => {
+    setLiveConversations(conversations);
+  }, [conversations]);
+
+  useEffect(() => {
+    if (!selectedId && liveConversations.length > 0) {
+      setSelectedId(liveConversations[0].id);
+    }
+  }, [liveConversations, selectedId]);
+
+  useEffect(() => {
+    const severitySocket = io(resolveSocketServerUrl(), {
+      transports: ["websocket"],
+    });
+
+    severitySocket.on("severity_update", (event: SeverityUpdateEvent) => {
+      if (!event?.conversationId) return;
+      setLiveConversations((prev) =>
+        prev.map((conv) =>
+          conv.id === event.conversationId
+            ? {
+                ...conv,
+                severity: event.severity ?? conv.severity,
+                severityConf:
+                  event.severity_conf == null
+                    ? conv.severityConf
+                    : event.severity_conf,
+                severityReason: event.severity_reason ?? conv.severityReason,
+              }
+            : conv,
+        ),
+      );
+    });
+
+    return () => {
+      severitySocket.disconnect();
+    };
   }, []);
 
   useEffect(() => {
@@ -416,22 +489,31 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
     stopOperatorMicrophoneCapture,
   ]);
 
+  const orderedConversations = [...liveConversations].sort((a, b) => {
+    const severityDelta = getSeverityRank(a.severity) - getSeverityRank(b.severity);
+    if (severityDelta !== 0) return severityDelta;
+
+    const aTs = a.lastActivity ? new Date(a.lastActivity).getTime() : 0;
+    const bTs = b.lastActivity ? new Date(b.lastActivity).getTime() : 0;
+    return bTs - aTs;
+  });
+
   const filtered =
     filter === "all"
-      ? conversations
-      : conversations.filter((c) => c.phase === filter);
+      ? orderedConversations
+      : orderedConversations.filter((c) => c.phase === filter);
 
   const tabs: { key: FilterTab; label: string; count: number }[] = [
-    { key: "all", label: "All", count: conversations.length },
+    { key: "all", label: "All", count: liveConversations.length },
     {
       key: "triage",
       label: "Triage",
-      count: conversations.filter((c) => c.phase === "triage").length,
+      count: liveConversations.filter((c) => c.phase === "triage").length,
     },
     {
       key: "diagnosis",
       label: "Diagnosis",
-      count: conversations.filter((c) => c.phase === "diagnosis").length,
+      count: liveConversations.filter((c) => c.phase === "diagnosis").length,
     },
   ];
 
@@ -463,7 +545,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               Conversations
             </h1>
             <p className="text-xs text-slate-500 mt-0.5">
-              {conversations.length} total
+              {liveConversations.length} total
             </p>
           </div>
           {onCollapse && (
@@ -557,6 +639,17 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                         >
                           {phaseConfig[conv.phase].label}
                         </span>
+                        {conv.severity && (
+                          <span
+                            title={conv.severityReason ?? undefined}
+                            className={cn(
+                              "text-[10px] font-medium px-1.5 py-0.5 rounded border",
+                              severityConfig[conv.severity].className,
+                            )}
+                          >
+                            {severityConfig[conv.severity].label}
+                          </span>
+                        )}
                         {conv.classification && (
                           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded border bg-slate-100 text-slate-600 border-slate-200">
                             {conv.classification}
@@ -600,9 +693,6 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
           </div>
           <div className="flex flex-col items-end gap-2 shrink-0">
             <Button
-              variant={
-                listenTargetId === selected.id ? "destructive" : "outline"
-              }
               variant={isListeningSelected ? "destructive" : "outline"}
               size="sm"
               onClick={() => {
@@ -706,6 +796,20 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               >
                 {phaseConfig[selected.phase].label} phase
               </span>
+              {selected.severity && (
+                <span
+                  title={selected.severityReason ?? undefined}
+                  className={cn(
+                    "text-xs font-medium px-2.5 py-1 rounded border",
+                    severityConfig[selected.severity].className,
+                  )}
+                >
+                  {severityConfig[selected.severity].label}
+                  {selected.severityConf != null
+                    ? ` ${(selected.severityConf * 100).toFixed(0)}%`
+                    : ""}
+                </span>
+              )}
               {selected.classification && (
                 <span className="text-xs font-medium px-2.5 py-1 rounded border bg-slate-100 text-slate-600 border-slate-200">
                   {selected.classification}
@@ -754,6 +858,11 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
           )}
           {takeoverError && (
             <span className="text-xs text-red-600">{takeoverError}</span>
+          )}
+          {selected.severityReason && (
+            <span className="text-xs text-slate-500">
+              Severity note: {selected.severityReason}
+            </span>
           )}
         </div>
 
