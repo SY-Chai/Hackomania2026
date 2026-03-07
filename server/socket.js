@@ -4,8 +4,17 @@ import { getUTC8Time, uploadToR2, convertPCM16ToWAV } from "./utils.js";
 import { saveMessage, updateConversationAudio } from "./db.js";
 import { ASSISTANT_PROMPT } from "./prompt.js";
 
+// Set MODAL_AGENT_WS_URL in .env to use the Modal speech agent.
+// Falls back to OpenAI Realtime if unset.
+const USE_MODAL_AGENT = !!process.env.MODAL_AGENT_WS_URL;
+const MODAL_AGENT_WS_URL = process.env.MODAL_AGENT_WS_URL || "";
 const OPENAI_REALTIME_URL =
   "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview";
+
+// Silence duration (ms) before committing the audio buffer to the Modal agent.
+// Only used when USE_MODAL_AGENT=true (OpenAI uses server_vad instead).
+const MODAL_SILENCE_MS = Number(process.env.MODAL_SILENCE_MS || 1200);
+
 const MAX_ROLLING_CHUNKS = 20; // ~1.6 seconds of rolling historical context (4096 bytes per chunk)
 const MAX_CONVERSATION_PCM_BYTES = 50 * 1024 * 1024; // 50 MB cap per call
 const TRIAGE_INTERVAL_MS = Number(process.env.SEVERITY_REEVAL_MS || 10000);
@@ -390,34 +399,66 @@ export function setupSocket(io) {
         }
       }
 
-      openAiWs = new WebSocket(OPENAI_REALTIME_URL, {
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          "OpenAI-Beta": "realtime=v1",
-        },
-      });
+      const agentUrl = USE_MODAL_AGENT ? MODAL_AGENT_WS_URL : OPENAI_REALTIME_URL;
+      const agentHeaders = USE_MODAL_AGENT
+        ? {}
+        : {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            "OpenAI-Beta": "realtime=v1",
+          };
+
+      openAiWs = new WebSocket(agentUrl, { headers: agentHeaders });
+
+      // Silence-based auto-commit for Modal agent (replaces OpenAI's server_vad)
+      let silenceTimer = null;
+      const resetSilenceTimer = () => {
+        if (!USE_MODAL_AGENT) return;
+        clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(() => {
+          if (openAiWs?.readyState === WebSocket.OPEN) {
+            openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+          }
+        }, MODAL_SILENCE_MS);
+      };
+      const clearSilenceTimer = () => clearTimeout(silenceTimer);
 
       openAiWs.on("open", () => {
-        console.log(`[Socket ${socket.id}] Connected to OpenAI Realtime API`);
-        openAiWs.send(
-          JSON.stringify({
-            type: "session.update",
-            session: {
-              modalities: ["audio", "text"],
-              instructions: ASSISTANT_PROMPT.trim(),
-              voice: "sage",
-              input_audio_format: "pcm16",
-              output_audio_format: "pcm16",
-              input_audio_transcription: { model: "whisper-1" },
-              turn_detection: {
-                type: "server_vad",
-                threshold: 0.65,
-                prefix_padding_ms: 300,
-                silence_duration_ms: 1000,
-              },
-            },
-          }),
+        console.log(
+          `[Socket ${socket.id}] Connected to ${USE_MODAL_AGENT ? "Modal agent" : "OpenAI Realtime API"}`,
         );
+
+        if (USE_MODAL_AGENT) {
+          openAiWs.send(
+            JSON.stringify({
+              type: "session.update",
+              session: {
+                voice: "alloy",
+                system_prompt: ASSISTANT_PROMPT.trim(),
+              },
+            }),
+          );
+        } else {
+          openAiWs.send(
+            JSON.stringify({
+              type: "session.update",
+              session: {
+                modalities: ["audio", "text"],
+                instructions: ASSISTANT_PROMPT.trim(),
+                voice: "sage",
+                input_audio_format: "pcm16",
+                output_audio_format: "pcm16",
+                input_audio_transcription: { model: "whisper-1" },
+                turn_detection: {
+                  type: "server_vad",
+                  threshold: 0.65,
+                  prefix_padding_ms: 300,
+                  silence_duration_ms: 1000,
+                },
+              },
+            }),
+          );
+        }
+
         socket.emit("session_started");
         startTriageLoop();
       });
@@ -488,9 +529,24 @@ export function setupSocket(io) {
               assistantAudioBuffer = [];
               break;
 
+            // OpenAI Realtime: user transcript
             case "conversation.item.input_audio_transcription.completed":
               handleTranscriptDone("user", userAudioBuffer, event);
               userAudioBuffer = [];
+              break;
+
+            // Modal agent: user transcript (FireRedASR/Whisper result)
+            case "conversation.item.created":
+              if (event.item?.role === "user") {
+                const transcript = event.item?.content?.[0]?.transcript;
+                if (transcript) {
+                  handleTranscriptDone("user", userAudioBuffer, {
+                    transcript,
+                    item_id: event.item?.id || Date.now().toString(),
+                  });
+                  userAudioBuffer = [];
+                }
+              }
               break;
 
             case "error":
@@ -519,7 +575,8 @@ export function setupSocket(io) {
       });
 
       openAiWs.on("close", () => {
-        console.log(`[Socket ${socket.id}] OpenAI WebSocket closed`);
+        clearSilenceTimer();
+        console.log(`[Socket ${socket.id}] Agent WebSocket closed`);
         socket.emit("session_stopped");
         stopTriageLoop();
 
@@ -566,8 +623,8 @@ export function setupSocket(io) {
       });
 
       openAiWs.on("error", (err) => {
-        console.error(`[Socket ${socket.id}] OpenAI WebSocket error:`, err);
-        socket.emit("session_error", "WebSocket error connecting to OpenAI");
+        console.error(`[Socket ${socket.id}] Agent WebSocket error:`, err);
+        socket.emit("session_error", "WebSocket error connecting to agent");
       });
     });
 
@@ -601,6 +658,7 @@ export function setupSocket(io) {
           audio: buf.toString("base64"),
         }),
       );
+      resetSilenceTimer();
 
       if (isRecordingUser) {
         userAudioBuffer.push(buf);
