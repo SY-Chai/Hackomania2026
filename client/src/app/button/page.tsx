@@ -416,9 +416,9 @@ Your goals:
       setIsConnected(true);
       setStatus("Connected — speak now");
 
-      session.sendMessage(
-        "The senior has pressed the Personal Alert Button. Please greet them and ask what happened."
-      );
+      // session.sendMessage(
+      //   "The senior has pressed the Personal Alert Button. Please greet them and ask what happened."
+      // );
     } catch (err: any) {
       console.error("❌ WS DEBUG: startConversation failed", err);
       setError(err?.message ?? "Failed to start the voice conversation.");
