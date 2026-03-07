@@ -611,7 +611,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
     <div className="flex h-full min-h-0 overflow-hidden">
       {/* Left panel */}
       <div className="flex flex-col w-80 bg-white border-r border-slate-200 shrink-0 h-full min-h-0">
-        <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-slate-100">
+        <div className="flex items-center justify-between px-4 pt-4 pb-4 border-b border-slate-100">
           <div>
             <h1 className="text-sm font-semibold text-slate-900">
               Conversations
