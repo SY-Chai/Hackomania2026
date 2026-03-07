@@ -222,7 +222,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
       .then((data: PABLocation | null) => {
         if (!cancelled && data) setPabLocation(data);
       })
-      .catch(() => {});
+      .catch(() => { });
     return () => { cancelled = true; };
   }, [selected?.pabId]);
 
@@ -277,6 +277,8 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
           const input = event.inputBuffer.getChannelData(0);
           const copied = new Float32Array(input);
           const pcm16 = resampleTo24k(copied, audioContext.sampleRate);
+
+          console.log(`[FRONTEND DEBUG] Emitting operator_audio for conv ${conversationId}, buffer length: ${pcm16.buffer.byteLength}`);
 
           socket.emit("operator_audio", {
             conversationId,
@@ -748,8 +750,8 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 <MapPin className="w-3 h-3 shrink-0" />
                 {pabLocation
                   ? [pabLocation.unitNo, pabLocation.streetName, pabLocation.postalCode && `S(${pabLocation.postalCode})`]
-                      .filter(Boolean)
-                      .join(", ") || `ID: ${selected.id.slice(0, 8)}…`
+                    .filter(Boolean)
+                    .join(", ") || `ID: ${selected.id.slice(0, 8)}…`
                   : `ID: ${selected.id.slice(0, 8)}…`}
               </span>
             </div>
@@ -784,98 +786,98 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 className="min-w-[140px] justify-center"
                 variant={isListeningSelected ? "destructive" : "outline"}
                 size="sm"
-              onClick={() => {
-                if (isListeningSelected) {
-                  listenerSocketRef.current?.emit("operator_takeover_stop", selected.id);
-                  stopOperatorMicrophoneCapture();
-                  setLiveAudioStatus("Live audio off");
+                onClick={() => {
+                  if (isListeningSelected) {
+                    listenerSocketRef.current?.emit("operator_takeover_stop", selected.id);
+                    stopOperatorMicrophoneCapture();
+                    setLiveAudioStatus("Live audio off");
+                    setLiveAudioError(null);
+                    setIsAudioConnecting(false);
+                    pendingTakeoverConversationIdRef.current = null;
+                    setPendingTakeoverConversationId(null);
+                    setTakeoverConversationId(null);
+                    setTakeoverError(null);
+                    setListenTargetId(null);
+                    return;
+                  }
                   setLiveAudioError(null);
-                  setIsAudioConnecting(false);
-                  pendingTakeoverConversationIdRef.current = null;
-                  setPendingTakeoverConversationId(null);
-                  setTakeoverConversationId(null);
-                  setTakeoverError(null);
-                  setListenTargetId(null);
-                  return;
-                }
-                setLiveAudioError(null);
-                setLastSpeaker(null);
-                setIsAudioConnecting(true);
-                setLiveAudioStatus("Connecting to live audio...");
-                setListenTargetId(selected.id);
-              }}
-              disabled={isAudioConnecting && isListeningSelected}
-            >
-              {isAudioConnecting && isListeningSelected ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  Connecting
-                </>
-              ) : isListeningSelected ? (
-                <>
-                  <Headphones className="w-3.5 h-3.5" />
-                  Stop listening
-                </>
-              ) : (
-                <>
-                  <Headphones className="w-3.5 h-3.5" />
-                  Listen live
-                </>
-              )}
+                  setLastSpeaker(null);
+                  setIsAudioConnecting(true);
+                  setLiveAudioStatus("Connecting to live audio...");
+                  setListenTargetId(selected.id);
+                }}
+                disabled={isAudioConnecting && isListeningSelected}
+              >
+                {isAudioConnecting && isListeningSelected ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Connecting
+                  </>
+                ) : isListeningSelected ? (
+                  <>
+                    <Headphones className="w-3.5 h-3.5" />
+                    Stop listening
+                  </>
+                ) : (
+                  <>
+                    <Headphones className="w-3.5 h-3.5" />
+                    Listen live
+                  </>
+                )}
               </Button>
               <Button
                 className="min-w-[140px] justify-center"
                 variant={isTakeoverSelected ? "destructive" : "default"}
                 size="sm"
-              onClick={() => {
-                if (isTakeoverSelected || isTakeoverPending) {
-                  listenerSocketRef.current?.emit("operator_takeover_stop", selected.id);
-                  stopOperatorMicrophoneCapture();
-                  pendingTakeoverConversationIdRef.current = null;
-                  setPendingTakeoverConversationId(null);
-                  setTakeoverConversationId(null);
+                onClick={() => {
+                  if (isTakeoverSelected || isTakeoverPending) {
+                    listenerSocketRef.current?.emit("operator_takeover_stop", selected.id);
+                    stopOperatorMicrophoneCapture();
+                    pendingTakeoverConversationIdRef.current = null;
+                    setPendingTakeoverConversationId(null);
+                    setTakeoverConversationId(null);
+                    setTakeoverError(null);
+                    setLiveAudioStatus(isListeningSelected ? "Listening live" : "Live audio off");
+                    return;
+                  }
+
+                  setLiveAudioError(null);
                   setTakeoverError(null);
-                  setLiveAudioStatus(isListeningSelected ? "Listening live" : "Live audio off");
-                  return;
-                }
+                  pendingTakeoverConversationIdRef.current = selected.id;
+                  setPendingTakeoverConversationId(selected.id);
+                  setLiveAudioStatus("Connecting operator call...");
 
-                setLiveAudioError(null);
-                setTakeoverError(null);
-                pendingTakeoverConversationIdRef.current = selected.id;
-                setPendingTakeoverConversationId(selected.id);
-                setLiveAudioStatus("Connecting operator call...");
+                  const socket = listenerSocketRef.current;
+                  if (
+                    isListeningSelected &&
+                    socket?.connected &&
+                    joinedConversationIdRef.current === selected.id
+                  ) {
+                    socket.emit("operator_takeover_start", selected.id);
+                    return;
+                  }
 
-                const socket = listenerSocketRef.current;
-                if (
-                  isListeningSelected &&
-                  socket?.connected &&
-                  joinedConversationIdRef.current === selected.id
-                ) {
-                  socket.emit("operator_takeover_start", selected.id);
-                  return;
-                }
-
-                setIsAudioConnecting(true);
-                setListenTargetId(selected.id);
-              }}
-              disabled={isAudioConnecting && !isListeningSelected}
-            >
-              {isTakeoverPending ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  Taking over
-                </>
-              ) : isTakeoverSelected ? (
-                <>
-                  <PhoneOff className="w-3.5 h-3.5" />
-                  End call
-                </>
-              ) : (
-                <>
-                  <Mic className="w-3.5 h-3.5" />
-                  Take over
-                </>
-              )}
+                  setIsAudioConnecting(true);
+                  setListenTargetId(selected.id);
+                }}
+                disabled={isAudioConnecting && !isListeningSelected}
+              >
+                {isTakeoverPending ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Taking over
+                  </>
+                ) : isTakeoverSelected ? (
+                  <>
+                    <PhoneOff className="w-3.5 h-3.5" />
+                    End call
+                  </>
+                ) : (
+                  <>
+                    <Mic className="w-3.5 h-3.5" />
+                    Take over
+                  </>
+                )}
               </Button>
             </div>
           </div>
@@ -999,57 +1001,57 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
           )}
           <div className="h-full overflow-y-auto pl-2 pr-4 py-2">
             <div className="space-y-4 max-w-3xl">
-            {selected.messages.map((msg) => {
-              const cfg = senderConfig[msg.sender];
-              const Icon = cfg.icon;
-              const isRight = msg.sender === "senior";
+              {selected.messages.map((msg) => {
+                const cfg = senderConfig[msg.sender];
+                const Icon = cfg.icon;
+                const isRight = msg.sender === "senior";
 
-              return (
-                <div
-                  key={msg.id}
-                  className={cn("flex gap-3", isRight && "flex-row-reverse")}
-                >
+                return (
                   <div
-                    className={cn(
-                      "flex items-center justify-center w-7 h-7 rounded-full shrink-0 mt-0.5",
-                      cfg.bg,
-                    )}
+                    key={msg.id}
+                    className={cn("flex gap-3", isRight && "flex-row-reverse")}
                   >
-                    <Icon className={cn("w-3.5 h-3.5", cfg.text)} />
-                  </div>
-                  <div
-                    className={cn(
-                      "flex flex-col max-w-sm",
-                      isRight && "items-end",
-                    )}
-                  >
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <span className="text-[10px] font-semibold text-slate-500">
-                        {msg.senderName}
-                      </span>
-                      <span className="text-[9px] px-1 rounded text-slate-400 border border-slate-200 bg-white">
-                        {cfg.label}
-                      </span>
-                      <span className="text-[10px] text-slate-400">
-                        {formatTime(msg.timestamp)}
-                      </span>
+                    <div
+                      className={cn(
+                        "flex items-center justify-center w-7 h-7 rounded-full shrink-0 mt-0.5",
+                        cfg.bg,
+                      )}
+                    >
+                      <Icon className={cn("w-3.5 h-3.5", cfg.text)} />
                     </div>
                     <div
                       className={cn(
-                        "px-2 py-1 rounded-xl text-xs leading-relaxed",
-                        msg.sender === "senior"
-                          ? "bg-slate-900 text-white"
-                          : msg.sender === "agent"
-                            ? "bg-slate-100 text-slate-800 border border-slate-200"
-                            : "bg-white text-slate-800 border border-slate-200",
+                        "flex flex-col max-w-sm",
+                        isRight && "items-end",
                       )}
                     >
-                      {msg.content}
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-[10px] font-semibold text-slate-500">
+                          {msg.senderName}
+                        </span>
+                        <span className="text-[9px] px-1 rounded text-slate-400 border border-slate-200 bg-white">
+                          {cfg.label}
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          {formatTime(msg.timestamp)}
+                        </span>
+                      </div>
+                      <div
+                        className={cn(
+                          "px-2 py-1 rounded-xl text-xs leading-relaxed",
+                          msg.sender === "senior"
+                            ? "bg-slate-900 text-white"
+                            : msg.sender === "agent"
+                              ? "bg-slate-100 text-slate-800 border border-slate-200"
+                              : "bg-white text-slate-800 border border-slate-200",
+                        )}
+                      >
+                        {msg.content}
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
             </div>
           </div>
         </div>

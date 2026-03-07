@@ -845,18 +845,36 @@ export function setupSocket(io) {
       const { conversationId, audio } = payload || {};
       if (!conversationId || !audio) return;
 
+      console.log(`[SOCKET DEBUG] Received operator_audio for conv ${conversationId}, audio length: ${audio.byteLength || audio.length}`);
+
       const session = liveConversationSessions.get(conversationId);
-      if (!session) return;
-      if (!session.takeoverActive || session.operatorSocketId !== socket.id)
+      if (!session) {
+        console.log(`[SOCKET DEBUG] Session not found for conv ${conversationId}`);
         return;
+      }
+      if (!session.takeoverActive || session.operatorSocketId !== socket.id) {
+        console.log(`[SOCKET DEBUG] Takeover inactive or wrong socket: active=${session.takeoverActive}, opSocket=${session.operatorSocketId}, mySocket=${socket.id}`);
+        return;
+      }
 
       const buf = Buffer.from(audio);
+      let forwarded = false;
       if (isEsp32SessionLive(session)) {
-        forwardOperatorAudioToEsp32(session, buf);
+        console.log(`[SOCKET DEBUG] Forwarding audio to ESP32...`);
+        forwarded = forwardOperatorAudioToEsp32(session, buf);
+        console.log(`[SOCKET DEBUG] Forwarded to ESP32: ${forwarded}`);
       } else if (session.callerSocketId) {
         io.to(session.callerSocketId).emit("server_audio", buf);
+        forwarded = true;
       }
-      socket.to(conversationId).emit("conversation_audio", "agent", buf);
+
+      if (forwarded) {
+        socket.to(conversationId).emit("conversation_audio", "agent", buf);
+      } else if (session.source === "esp32") {
+        console.warn(
+          `⚠ [Socket ${socket.id}] operator_audio dropped for ESP32 conversation ${conversationId} (${buf.length} bytes)`,
+        );
+      }
     });
 
     socket.on("operator_takeover_stop", (conversationId) => {

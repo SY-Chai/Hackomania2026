@@ -4,6 +4,7 @@ import { saveMessage } from "./db.js";
 import { getUTC8Time } from "./utils.js";
 
 const DEFAULT_ESP32_PATHS = ["/esp32-phone"];
+const ESP32_MAX_FRAME_BYTES = Number(process.env.ESP32_MAX_FRAME_BYTES || 4096);
 
 const DEFAULT_SEVERITY = {
   severity: "uncertain",
@@ -54,14 +55,37 @@ export function isEsp32SessionLive(session) {
 }
 
 export function forwardOperatorAudioToEsp32(session, pcm24kBuffer) {
-  if (!isEsp32SessionLive(session)) return false;
+  if (!isEsp32SessionLive(session)) {
+    console.log("[ESP32 DEBUG] isEsp32SessionLive is false, not forwarding.");
+    return false;
+  }
 
   const pcmBuffer = toPcm16Buffer(pcm24kBuffer);
-  if (!pcmBuffer.length) return true;
+  if (!pcmBuffer.length) {
+    console.log("[ESP32 DEBUG] pcmBuffer is empty, returning.");
+    return true;
+  }
 
   try {
-    session.esp32Socket.send(pcmBuffer, { binary: true });
-    return true;
+    let sent = false;
+    let offset = 0;
+    
+    console.log(`[ESP32 DEBUG] Forwarding ${pcmBuffer.length} bytes framesize: ${ESP32_MAX_FRAME_BYTES}...`);
+
+    while (offset < pcmBuffer.length) {
+      let frameBytes = Math.min(ESP32_MAX_FRAME_BYTES, pcmBuffer.length - offset);
+      if (frameBytes % 2 !== 0) frameBytes -= 1;
+      if (frameBytes <= 0) break;
+
+      session.esp32Socket.send(
+        pcmBuffer.subarray(offset, offset + frameBytes),
+        { binary: true },
+      );
+      sent = true;
+      offset += frameBytes;
+    }
+
+    return sent;
   } catch (err) {
     console.error("❌ [ESP32] Failed to forward operator audio:", err);
     return false;
