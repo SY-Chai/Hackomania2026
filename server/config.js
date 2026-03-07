@@ -31,7 +31,9 @@ export const r2Client = new S3Client({
 });
 
 // Tracks currently live calls by conversation ID.
-// callerSocketId: the user's call socket
+// source: "openai" for browser caller socket, "esp32" for hardware bridge
+// callerSocketId: the browser caller socket (OpenAI flow)
 // operatorSocketId: operator socket that took over the call (if any)
 // takeoverActive: whether AI responses are paused in favor of operator audio
+// esp32Socket: ESP32 bridge websocket for hardware calls
 export const liveConversationSessions = new Map();
