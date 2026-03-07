@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import Map, { Source, Layer, Popup } from "react-map-gl/mapbox";
 import type { MapRef, MapMouseEvent } from "react-map-gl/mapbox";
 import type { CircleLayer, SymbolLayer } from "mapbox-gl";
@@ -33,7 +33,8 @@ export interface PABMarker {
 }
 
 interface Props {
-  pabs: PABMarker[];
+  pabs?: PABMarker[];
+  onStatsLoaded?: (stats: { stationary: number; ongoing: number }) => void;
 }
 
 // --- Mapbox layer styles (stable references) ---
@@ -108,11 +109,25 @@ function toFeature(p: PABMarker): GeoJSON.Feature {
   };
 }
 
-export function SingaporeMap({ pabs }: Props) {
+export function SingaporeMap({ pabs: propPabs, onStatsLoaded }: Props) {
   const mapRef = useRef<MapRef>(null);
+  const [fetchedPabs, setFetchedPabs] = useState<PABMarker[] | null>(null);
   const [popupInfo, setPopupInfo] = useState<PABMarker | null>(null);
   const [cursor, setCursor] = useState("auto");
   const [filterOngoingOnly, setFilterOngoingOnly] = useState(false);
+
+  useEffect(() => {
+    if (propPabs) return;
+    fetch("/api/pabs")
+      .then((r) => r.json())
+      .then((data: { markers: PABMarker[]; stationary: number; ongoing: number }) => {
+        setFetchedPabs(data.markers);
+        onStatsLoaded?.({ stationary: data.stationary, ongoing: data.ongoing });
+      })
+      .catch(() => {});
+  }, [propPabs, onStatsLoaded]);
+
+  const pabs = propPabs ?? fetchedPabs ?? [];
 
   const allGeojson = useMemo<GeoJSON.FeatureCollection>(
     () => ({

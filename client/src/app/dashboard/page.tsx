@@ -1,30 +1,15 @@
 import { Suspense } from "react";
 import { DashboardShell } from "@/components/dashboard/dashboard-shell";
-import {
-  fetchPABs,
-  fetchConversationsWithMessages,
-} from "@/lib/supabase";
-import {
-  toUIConversations,
-  toPABMarkers,
-  isOngoing,
-} from "@/lib/dashboard-utils";
+import { fetchConversationsWithMessages } from "@/lib/supabase";
+import { toUIConversations, isOngoing } from "@/lib/dashboard-utils";
 
 async function DashboardContent() {
-  const [pabs, rawConversations] = await Promise.all([
-    fetchPABs(),
-    fetchConversationsWithMessages(),
-  ]);
-
+  const rawConversations = await fetchConversationsWithMessages();
   const ongoing = rawConversations.filter(isOngoing);
 
   return (
     <DashboardShell
       conversations={toUIConversations(rawConversations)}
-      mapPABs={toPABMarkers(pabs, ongoing)}
-      stationary={
-        pabs.filter((p) => p.latitude != null && p.longitude != null).length
-      }
       ongoing={ongoing.length}
     />
   );

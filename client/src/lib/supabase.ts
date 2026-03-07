@@ -3,16 +3,10 @@ import { createClient } from "@supabase/supabase-js";
 const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_SECRET_KEY!;
 
-export const supabase = typeof window === 'undefined' && process.env.SUPABASE_SECRET_KEY
-  ? createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SECRET_KEY!)
-  : null;
-
-// Browser client (publishable key — safe to expose)
-export const supabaseBrowser = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
-);
-// --- Types matching the DB schema ---
+export const supabase =
+  typeof window === "undefined" && process.env.SUPABASE_SECRET_KEY
+    ? createClient(supabaseUrl, supabaseKey)
+    : null;
 
 export interface DBConversation {
   id: string;
@@ -62,24 +56,30 @@ export async function fetchConversations(): Promise<DBConversation[]> {
   return data ?? [];
 }
 
+const CONVERSATION_COLS =
+  "id,start,end,triage,classification,severity,severity_conf,severity_reason";
+const MESSAGE_COLS = "id,author_id,content,timestamp,conversation_id";
+
 export async function fetchConversationsWithMessages(): Promise<
   (DBConversation & { messages: DBMessage[] })[]
 > {
   const { data, error } = await supabase!
     .from("conversations")
-    .select("*, messages(*)")
+    .select(`${CONVERSATION_COLS},messages(${MESSAGE_COLS})`)
     .order("start", { ascending: false });
 
   if (error) throw error;
   return (data ?? []) as (DBConversation & { messages: DBMessage[] })[];
 }
 
+const PAB_COLS = "id,longitude,latitude,unit_no,street_name";
+
 export async function fetchPABs(): Promise<DBPAB[]> {
   const pageSize = 1000;
 
   const { count, error: countErr } = await supabase!
     .from("pabs")
-    .select("*", { count: "exact", head: true });
+    .select("id", { count: "exact", head: true });
   if (countErr) throw countErr;
   if (!count) return [];
 
@@ -88,7 +88,7 @@ export async function fetchPABs(): Promise<DBPAB[]> {
     Array.from({ length: pages }, (_, i) =>
       supabase!
         .from("pabs")
-        .select("*")
+        .select(PAB_COLS)
         .range(i * pageSize, (i + 1) * pageSize - 1),
     ),
   );

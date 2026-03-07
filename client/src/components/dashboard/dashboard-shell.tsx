@@ -5,7 +5,6 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { MapPin, Phone, AlertTriangle, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConversationsView, type UIConversation } from "./conversations-view";
-import type { PABMarker } from "@/components/map/singapore-map";
 
 const SingaporeMap = dynamic(
   () =>
@@ -15,8 +14,6 @@ const SingaporeMap = dynamic(
 
 interface Props {
   conversations: UIConversation[];
-  mapPABs: PABMarker[];
-  stationary: number;
   ongoing: number;
 }
 
@@ -33,12 +30,11 @@ const COLLAPSE_THRESHOLD = 120;
 
 export function DashboardShell({
   conversations,
-  mapPABs,
-  stationary,
   ongoing,
 }: Props) {
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const [collapsed, setCollapsed] = useState(false);
+  const [mapStats, setMapStats] = useState<{ stationary: number; ongoing: number } | null>(null);
 
   // Refs to track drag state without causing re-renders
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -90,6 +86,14 @@ export function DashboardShell({
     setCollapsed((prev) => !prev);
   }, []);
 
+  const onStatsLoaded = useCallback(
+    (stats: { stationary: number; ongoing: number }) => setMapStats(stats),
+    [],
+  );
+
+  const stationary = mapStats?.stationary ?? 0;
+  const displayOngoing = mapStats?.ongoing ?? ongoing;
+
   return (
     <div className="flex h-full overflow-hidden select-none">
       {/* Left: Conversations panel */}
@@ -126,10 +130,10 @@ export function DashboardShell({
       {/* Right: Map */}
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex-1 min-h-0 relative rounded border border-slate-200 overflow-hidden">
-          <SingaporeMap pabs={mapPABs} />
+          <SingaporeMap onStatsLoaded={onStatsLoaded} />
           {/* Compact stats overlay — top left */}
           <div className="absolute top-3 left-3 z-10 bg-white/95 border border-slate-200 rounded p-2 flex flex-col gap-1 text-xs shadow-sm">
-            {STATS(stationary, ongoing).map(({ label, value, Icon }) => (
+            {STATS(stationary, displayOngoing).map(({ label, value, Icon }) => (
               <div key={label} className="flex items-center gap-2">
                 <Icon className="w-3 h-3 text-slate-400 shrink-0" />
                 <span className="font-semibold text-slate-800 tabular-nums w-10 text-right">
