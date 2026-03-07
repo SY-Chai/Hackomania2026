@@ -1,7 +1,7 @@
+import { Suspense } from "react";
 import { DashboardShell } from "@/components/dashboard/dashboard-shell";
 import {
   fetchPABs,
-  fetchConversations,
   fetchConversationsWithMessages,
 } from "@/lib/supabase";
 import {
@@ -10,37 +10,11 @@ import {
   isOngoing,
 } from "@/lib/dashboard-utils";
 
-export default async function DashboardPage() {
-  let pabs: Awaited<ReturnType<typeof fetchPABs>> = [];
-  let rawConversations: Awaited<
-    ReturnType<typeof fetchConversationsWithMessages>
-  > = [];
-  let allConversations: Awaited<ReturnType<typeof fetchConversations>> = [];
-
-  try {
-    [pabs, rawConversations, allConversations] = await Promise.all([
-      fetchPABs(),
-      fetchConversationsWithMessages(),
-      fetchConversations(),
-    ]);
-  } catch (e) {
-    console.error("[dashboard] parallel fetch failed:", e);
-    try {
-      pabs = await fetchPABs();
-    } catch (e2) {
-      console.error("[dashboard] fetchPABs failed:", e2);
-    }
-    try {
-      rawConversations = await fetchConversationsWithMessages();
-    } catch (e2) {
-      console.error("[dashboard] fetchConversationsWithMessages failed:", e2);
-    }
-    try {
-      allConversations = await fetchConversations();
-    } catch (e2) {
-      console.error("[dashboard] fetchConversations failed:", e2);
-    }
-  }
+async function DashboardContent() {
+  const [pabs, rawConversations] = await Promise.all([
+    fetchPABs(),
+    fetchConversationsWithMessages(),
+  ]);
 
   const ongoing = rawConversations.filter(isOngoing);
 
@@ -53,5 +27,34 @@ export default async function DashboardPage() {
       }
       ongoing={ongoing.length}
     />
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="flex h-full overflow-hidden animate-pulse">
+      <div className="w-[700px] shrink-0 border-r border-slate-200 bg-white p-4 space-y-4">
+        <div className="h-5 w-32 bg-slate-200 rounded" />
+        <div className="h-8 w-full bg-slate-100 rounded" />
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="flex gap-3">
+            <div className="w-8 h-8 rounded-full bg-slate-200 shrink-0" />
+            <div className="flex-1 space-y-2">
+              <div className="h-3 w-40 bg-slate-200 rounded" />
+              <div className="h-3 w-24 bg-slate-100 rounded" />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex-1 bg-slate-100" />
+    </div>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={<DashboardSkeleton />}>
+      <DashboardContent />
+    </Suspense>
   );
 }

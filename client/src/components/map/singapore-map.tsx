@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import Map, { Source, Layer, Popup } from "react-map-gl/mapbox";
 import type { MapRef, MapMouseEvent } from "react-map-gl/mapbox";
 import type { CircleLayer, SymbolLayer } from "mapbox-gl";
@@ -36,9 +36,8 @@ interface Props {
   pabs: PABMarker[];
 }
 
-// --- Mapbox layer styles ---
+// --- Mapbox layer styles (stable references) ---
 
-// Clusters: red if any PAB in cluster has an active call, green otherwise
 const clusterLayer: CircleLayer = {
   id: "clusters",
   type: "circle",
@@ -48,8 +47,8 @@ const clusterLayer: CircleLayer = {
     "circle-color": [
       "case",
       [">", ["get", "callCount"], 0],
-      "#ef4444", // red — has active calls
-      "#10b981", // green — no active calls
+      "#ef4444",
+      "#10b981",
     ],
     "circle-radius": ["step", ["get", "point_count"], 18, 50, 24, 200, 30],
     "circle-stroke-width": 2,
@@ -80,9 +79,9 @@ const unclusteredPointLayer: CircleLayer = {
     "circle-color": [
       "match",
       ["get", "status"],
-      "call", "#ef4444",    // red — active call
-      "inactive", "#94a3b8", // gray — offline
-      "#10b981",             // default green — no call
+      "call", "#ef4444",
+      "inactive", "#94a3b8",
+      "#10b981",
     ],
     "circle-radius": 7,
     "circle-stroke-width": 2,
@@ -90,32 +89,48 @@ const unclusteredPointLayer: CircleLayer = {
   },
 };
 
+const INITIAL_VIEW = { longitude: 103.8198, latitude: 1.3521, zoom: 10.8 };
+const MAP_STYLE = { width: "100%", height: "100%" } as const;
+const INTERACTIVE_LAYERS = ["clusters", "unclustered-point"];
+
+function toFeature(p: PABMarker): GeoJSON.Feature {
+  return {
+    type: "Feature",
+    geometry: { type: "Point", coordinates: [p.lng, p.lat] },
+    properties: {
+      id: p.id,
+      name: p.name,
+      status: p.status,
+      address: p.address,
+      town: p.town,
+      callCount: p.status === "call" ? 1 : 0,
+    },
+  };
+}
+
 export function SingaporeMap({ pabs }: Props) {
   const mapRef = useRef<MapRef>(null);
   const [popupInfo, setPopupInfo] = useState<PABMarker | null>(null);
   const [cursor, setCursor] = useState("auto");
   const [filterOngoingOnly, setFilterOngoingOnly] = useState(false);
 
-  const displayedPABs = filterOngoingOnly
-    ? pabs.filter((p) => p.status === "call")
-    : pabs;
+  const allGeojson = useMemo<GeoJSON.FeatureCollection>(
+    () => ({
+      type: "FeatureCollection",
+      features: pabs.map(toFeature),
+    }),
+    [pabs],
+  );
 
-  const geojson: GeoJSON.FeatureCollection = {
-    type: "FeatureCollection",
-    features: displayedPABs.map((p) => ({
-      type: "Feature",
-      geometry: { type: "Point", coordinates: [p.lng, p.lat] },
-      properties: {
-        id: p.id,
-        name: p.name,
-        status: p.status,
-        address: p.address,
-        town: p.town,
-        // numeric flag for cluster aggregation (1 = has call)
-        callCount: p.status === "call" ? 1 : 0,
-      },
-    })),
-  };
+  const callGeojson = useMemo<GeoJSON.FeatureCollection>(
+    () => ({
+      type: "FeatureCollection",
+      features: pabs.filter((p) => p.status === "call").map(toFeature),
+    }),
+    [pabs],
+  );
+
+  const geojson = filterOngoingOnly ? callGeojson : allGeojson;
 
   const onClick = useCallback((e: MapMouseEvent) => {
     const feature = e.features?.[0];
@@ -145,23 +160,31 @@ export function SingaporeMap({ pabs }: Props) {
     }
   }, []);
 
-  const ongoingCount = pabs.filter((p) => p.status === "call").length;
+  const onMouseEnter = useCallback(() => setCursor("pointer"), []);
+  const onMouseLeave = useCallback(() => setCursor("auto"), []);
+  const onPopupClose = useCallback(() => setPopupInfo(null), []);
+  const toggleFilter = useCallback(() => setFilterOngoingOnly((v) => !v), []);
+
+  const ongoingCount = useMemo(
+    () => pabs.filter((p) => p.status === "call").length,
+    [pabs],
+  );
 
   return (
     <div className="relative w-full h-full overflow-hidden">
       <Map
         ref={mapRef}
-        initialViewState={{ longitude: 103.8198, latitude: 1.3521, zoom: 10.8 }}
+        initialViewState={INITIAL_VIEW}
         maxBounds={SINGAPORE_BOUNDS}
-        style={{ width: "100%", height: "100%" }}
+        style={MAP_STYLE}
         mapStyle="mapbox://styles/mapbox/light-v11"
         mapboxAccessToken={MAPBOX_TOKEN}
         attributionControl={false}
-        interactiveLayerIds={["clusters", "unclustered-point"]}
+        interactiveLayerIds={INTERACTIVE_LAYERS}
         onClick={onClick}
         cursor={cursor}
-        onMouseEnter={() => setCursor("pointer")}
-        onMouseLeave={() => setCursor("auto")}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
       >
         <Source
           id="pabs"
@@ -171,7 +194,6 @@ export function SingaporeMap({ pabs }: Props) {
           clusterMaxZoom={14}
           clusterRadius={50}
           clusterProperties={{
-            // sum call flags so clusters know if any member has a call
             callCount: ["+", ["get", "callCount"]],
           }}
         >
@@ -184,7 +206,7 @@ export function SingaporeMap({ pabs }: Props) {
           <Popup
             longitude={popupInfo.lng}
             latitude={popupInfo.lat}
-            onClose={() => setPopupInfo(null)}
+            onClose={onPopupClose}
             closeButton
             closeOnClick={false}
             offset={14}
@@ -217,7 +239,7 @@ export function SingaporeMap({ pabs }: Props) {
       {/* Filter button */}
       <div className="absolute top-4 right-4">
         <button
-          onClick={() => setFilterOngoingOnly((v) => !v)}
+          onClick={toggleFilter}
           className={cn(
             "flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border shadow-sm transition-colors",
             filterOngoingOnly

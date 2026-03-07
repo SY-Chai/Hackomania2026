@@ -1,10 +1,17 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { MapPin, Phone, AlertTriangle, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConversationsView, type UIConversation } from "./conversations-view";
-import { SingaporeMap, type PABMarker } from "@/components/map/singapore-map";
+import type { PABMarker } from "@/components/map/singapore-map";
+
+const SingaporeMap = dynamic(
+  () =>
+    import("@/components/map/singapore-map").then((mod) => mod.SingaporeMap),
+  { ssr: false },
+);
 
 interface Props {
   conversations: UIConversation[];

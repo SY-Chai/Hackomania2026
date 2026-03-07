@@ -65,57 +65,38 @@ export async function fetchConversations(): Promise<DBConversation[]> {
 export async function fetchConversationsWithMessages(): Promise<
   (DBConversation & { messages: DBMessage[] })[]
 > {
-  const { data: convs, error: convErr } = await supabase!
+  const { data, error } = await supabase!
     .from("conversations")
-    .select("*")
+    .select("*, messages(*)")
     .order("start", { ascending: false });
 
-  if (convErr) throw convErr;
-  if (!convs?.length) return [];
-
-  const { data: msgs, error: msgErr } = await supabase!
-    .from("messages")
-    .select("*")
-    .in(
-      "conversation_id",
-      convs.map((c) => c.id),
-    )
-    .order("timestamp", { ascending: true });
-
-  if (msgErr) throw msgErr;
-
-  const msgsByConv = (msgs ?? []).reduce<Record<string, DBMessage[]>>(
-    (acc, m) => {
-      const cid = m.conversation_id;
-      if (!acc[cid]) acc[cid] = [];
-      acc[cid].push(m);
-      return acc;
-    },
-    {},
-  );
-
-  return convs.map((c) => ({
-    ...c,
-    messages: msgsByConv[c.id] ?? [],
-  }));
+  if (error) throw error;
+  return (data ?? []) as (DBConversation & { messages: DBMessage[] })[];
 }
 
 export async function fetchPABs(): Promise<DBPAB[]> {
   const pageSize = 1000;
-  let page = 0;
+
+  const { count, error: countErr } = await supabase!
+    .from("pabs")
+    .select("*", { count: "exact", head: true });
+  if (countErr) throw countErr;
+  if (!count) return [];
+
+  const pages = Math.ceil(count / pageSize);
+  const results = await Promise.all(
+    Array.from({ length: pages }, (_, i) =>
+      supabase!
+        .from("pabs")
+        .select("*")
+        .range(i * pageSize, (i + 1) * pageSize - 1),
+    ),
+  );
+
   const all: DBPAB[] = [];
-
-  while (true) {
-    const { data, error } = await supabase!
-      .from("pabs")
-      .select("*")
-      .range(page * pageSize, (page + 1) * pageSize - 1);
+  for (const { data, error } of results) {
     if (error) throw error;
-    if (!data?.length) break;
-    all.push(...data);
-    if (data.length < pageSize) break;
-    page++;
+    if (data) all.push(...data);
   }
-
   return all;
 }
