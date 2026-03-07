@@ -72,7 +72,7 @@ export async function fetchConversationsWithMessages(): Promise<
   return (data ?? []) as (DBConversation & { messages: DBMessage[] })[];
 }
 
-const PAB_COLS = "id,longitude,latitude,unit_no,street_name";
+const PAB_COLS = "id,longitude,latitude,unit_no,postal_code,street_name";
 
 export async function fetchPABs(): Promise<DBPAB[]> {
   const pageSize = 1000;

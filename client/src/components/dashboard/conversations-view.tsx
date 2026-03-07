@@ -37,6 +37,7 @@ export interface UIMessage {
 
 export interface UIConversation {
   id: string;
+  pabId: string | null;
   phase: "triage" | "diagnosis";
   classification: string | null;
   severity: "urgent" | "uncertain" | "non_urgent" | null;
@@ -45,6 +46,13 @@ export interface UIConversation {
   startedAt: string | null;
   lastActivity: string | null;
   messages: UIMessage[];
+}
+
+export interface PABLocation {
+  id: string;
+  unitNo: string | null;
+  postalCode: string | null;
+  streetName: string | null;
 }
 
 // --- Config ---
@@ -165,10 +173,25 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const [pabLocation, setPabLocation] = useState<PABLocation | null>(null);
+
   const selected =
     liveConversations.find((conv) => conv.id === selectedId) ??
     liveConversations[0] ??
     null;
+
+  useEffect(() => {
+    setPabLocation(null);
+    if (!selected?.pabId) return;
+    let cancelled = false;
+    fetch(`/api/pab-info?id=${encodeURIComponent(selected.pabId)}`)
+      .then((r) => r.json())
+      .then((data: PABLocation | null) => {
+        if (!cancelled && data) setPabLocation(data);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [selected?.pabId]);
 
   const stopOperatorMicrophoneCapture = useCallback(() => {
     try {
@@ -291,6 +314,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
         return [
           {
             id: c.id,
+            pabId: null,
             phase: normalizePhase(c.triage),
             classification: c.classification,
             severity: c.severity,
@@ -338,6 +362,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
           conv.id === m.conversation_id
             ? {
               ...conv,
+              pabId: !conv.pabId && role === "senior" ? m.author_id : conv.pabId,
               lastActivity: m.timestamp ?? conv.lastActivity,
               messages: [...conv.messages, newMsg],
             }
@@ -681,7 +706,11 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               </h2>
               <span className="flex items-center gap-1 text-xs text-slate-500 mt-0.5">
                 <MapPin className="w-3 h-3 shrink-0" />
-                ID: {selected.id.slice(0, 8)}…
+                {pabLocation
+                  ? [pabLocation.unitNo, pabLocation.streetName, pabLocation.postalCode && `S(${pabLocation.postalCode})`]
+                      .filter(Boolean)
+                      .join(", ") || `ID: ${selected.id.slice(0, 8)}…`
+                  : `ID: ${selected.id.slice(0, 8)}…`}
               </span>
             </div>
           </div>

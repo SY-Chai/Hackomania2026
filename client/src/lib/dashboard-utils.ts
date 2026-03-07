@@ -38,9 +38,11 @@ export function toUIConversations(raw: (DBConversation & { messages: DBMessage[]
         timestamp: m.timestamp ?? "",
       };
     });
+    const seniorMsg = c.messages.find((m) => deriveRole(m.author_id) === "senior");
     const lastMsg = messages[messages.length - 1];
     return {
       id: c.id,
+      pabId: seniorMsg?.author_id ?? null,
       phase: normalizePhase(c.triage),
       classification: c.classification,
       severity: c.severity,
