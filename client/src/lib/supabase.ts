@@ -27,6 +27,12 @@ export interface DBMessage {
   content: string | null;
   timestamp: string | null;
   conversation_id: string;
+  users: { type: string | null } | null;
+}
+
+export interface DBUser {
+  id: string;
+  type: string | null;
 }
 
 export interface DBPAB {
@@ -58,7 +64,7 @@ export async function fetchConversations(): Promise<DBConversation[]> {
 
 const CONVERSATION_COLS =
   "id,start,end,triage,classification,severity,severity_conf,severity_reason";
-const MESSAGE_COLS = "id,author_id,content,timestamp,conversation_id";
+const MESSAGE_COLS = "id,author_id,content,timestamp,conversation_id,users(type)";
 
 export async function fetchConversationsWithMessages(): Promise<
   (DBConversation & { messages: DBMessage[] })[]
@@ -70,6 +76,12 @@ export async function fetchConversationsWithMessages(): Promise<
 
   if (error) throw error;
   return (data ?? []) as (DBConversation & { messages: DBMessage[] })[];
+}
+
+export async function fetchUsers(): Promise<DBUser[]> {
+  const { data, error } = await supabase!.from("users").select("id,type");
+  if (error) throw error;
+  return data ?? [];
 }
 
 const PAB_COLS = "id,longitude,latitude,unit_no,postal_code,street_name";

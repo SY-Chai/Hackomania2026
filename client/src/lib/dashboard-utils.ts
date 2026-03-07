@@ -3,17 +3,11 @@ import type { UIConversation, UIMessage } from "@/components/dashboard/conversat
 import type { PABMarker } from "@/components/map/singapore-map";
 
 const CLOSED_STATUSES = new Set(["resolved", "closed", "completed", "done"]);
-export function deriveRole(authorId: string | null): "senior" | "agent" | "human" {
-  if (!authorId) return "senior";
-
-  // Using NEXT_PUBLIC environment variables in Next.js
-  const agentId = process.env.NEXT_PUBLIC_AGENT_ID;
-  const operatorId = process.env.NEXT_PUBLIC_OPERATOR_ID;
-
-  if (agentId && authorId === agentId) return "agent";
-  if (operatorId && authorId === operatorId) return "human";
-
-  // Assume if it's not the agent or the operator, it's the PAB/Senior.
+export function deriveRole(userType: string | null | undefined): "senior" | "agent" | "human" {
+  if (!userType) return "senior";
+  const t = userType.toLowerCase();
+  if (t === "agent") return "agent";
+  if (t === "human" || t === "operator") return "human";
   return "senior";
 }
 
@@ -29,7 +23,7 @@ export function isOngoing(c: DBConversation): boolean {
 export function toUIConversations(raw: (DBConversation & { messages: DBMessage[] })[]): UIConversation[] {
   return raw.map((c) => {
     const messages: UIMessage[] = c.messages.map((m) => {
-      const role = deriveRole(m.author_id);
+      const role = deriveRole(m.users?.type);
       return {
         id: m.id,
         sender: role,
@@ -38,7 +32,7 @@ export function toUIConversations(raw: (DBConversation & { messages: DBMessage[]
         timestamp: m.timestamp ?? "",
       };
     });
-    const seniorMsg = c.messages.find((m) => deriveRole(m.author_id) === "senior");
+    const seniorMsg = c.messages.find((m) => deriveRole(m.users?.type) === "senior");
     const lastMsg = messages[messages.length - 1];
     return {
       id: c.id,
@@ -59,7 +53,7 @@ export function toPABMarkers(pabs: DBPAB[], ongoingConversations: (DBConversatio
   const ongoingPabIds = new Set(
     ongoingConversations
       .map((c) => {
-        const userMsg = c.messages.find(m => deriveRole(m.author_id) === "senior");
+        const userMsg = c.messages.find(m => deriveRole(m.users?.type) === "senior");
         return userMsg ? userMsg.author_id : null;
       })
       .filter((id): id is string => typeof id === "string")

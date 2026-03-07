@@ -164,6 +164,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const [pendingTakeoverConversationId, setPendingTakeoverConversationId] = useState<string | null>(null);
   const [takeoverError, setTakeoverError] = useState<string | null>(null);
 
+  const usersMapRef = useRef<Map<string, string>>(new Map());
   const listenerSocketRef = useRef<Socket | null>(null);
   const playbackAudioContextRef = useRef<AudioContext | null>(null);
   const nextPlaybackTimeRef = useRef(0);
@@ -192,6 +193,19 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
       .catch(() => {});
     return () => { cancelled = true; };
   }, [selected?.pabId]);
+
+  useEffect(() => {
+    fetch("/api/users")
+      .then((r) => r.json())
+      .then((data: { id: string; type: string | null }[]) => {
+        const map = new Map<string, string>();
+        for (const u of data) {
+          if (u.type) map.set(u.id, u.type);
+        }
+        usersMapRef.current = map;
+      })
+      .catch(() => {});
+  }, []);
 
   const stopOperatorMicrophoneCapture = useCallback(() => {
     try {
@@ -349,7 +363,8 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
     es.addEventListener("message_insert", (e) => {
       const m = JSON.parse(e.data) as DBMessage;
-      const role = deriveRole(m.author_id);
+      const userType = m.author_id ? usersMapRef.current.get(m.author_id) : undefined;
+      const role = deriveRole(userType);
       const newMsg = {
         id: m.id,
         sender: role,
