@@ -31,13 +31,13 @@ const MAX_WIDTH = 1200;
 const MIN_RIGHT_PANEL_WIDTH = 360; // keeps Listen live + Take over visible side-by-side
 const SEPARATOR_WIDTH = 8;
 
-export function DashboardShell({
-  conversations,
-  ongoing,
-}: Props) {
+export function DashboardShell({ conversations, ongoing }: Props) {
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const [isResizing, setIsResizing] = useState(false);
-  const [mapStats, setMapStats] = useState<{ stationary: number; ongoing: number } | null>(null);
+  const [mapStats, setMapStats] = useState<{
+    stationary: number;
+    ongoing: number;
+  } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Refs to track drag state without causing re-renders
@@ -67,7 +67,10 @@ export function DashboardShell({
       const newWidth = dragRef.current.startWidth + delta;
       const containerWidth = containerRef.current?.clientWidth ?? 0;
       const computedMaxWidth = containerWidth
-        ? Math.max(MIN_WIDTH, containerWidth - MIN_RIGHT_PANEL_WIDTH - SEPARATOR_WIDTH)
+        ? Math.max(
+            MIN_WIDTH,
+            containerWidth - MIN_RIGHT_PANEL_WIDTH - SEPARATOR_WIDTH,
+          )
         : MAX_WIDTH;
       const effectiveMaxWidth = Math.min(MAX_WIDTH, computedMaxWidth);
       setPanelWidth(Math.max(MIN_WIDTH, Math.min(newWidth, effectiveMaxWidth)));
@@ -120,7 +123,7 @@ export function DashboardShell({
         )}
       >
         {/* Grip dots */}
-        <div className="flex flex-col gap-[3px] opacity-50 group-hover:opacity-100 transition-opacity">
+        <div className="flex flex-col gap-0.75 opacity-50 group-hover:opacity-100 transition-opacity">
           {Array.from({ length: 5 }).map((_, i) => (
             <div key={i} className="w-1 h-1 rounded-full bg-slate-500" />
           ))}

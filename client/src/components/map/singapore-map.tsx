@@ -12,8 +12,8 @@ const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
 
 // Restrict panning/zooming to Singapore region
 const SINGAPORE_BOUNDS: [[number, number], [number, number]] = [
-  [103.49, 1.10],
-  [104.20, 1.55],
+  [103.49, 1.1],
+  [104.2, 1.55],
 ];
 
 const statusConfig = {
@@ -81,8 +81,10 @@ const unclusteredPointLayer: CircleLayer = {
     "circle-color": [
       "match",
       ["get", "status"],
-      "call", "#ef4444",
-      "inactive", "#94a3b8",
+      "call",
+      "#ef4444",
+      "inactive",
+      "#94a3b8",
       "#10b981",
     ],
     "circle-radius": 7,
@@ -110,7 +112,11 @@ function toFeature(p: PABMarker): GeoJSON.Feature {
   };
 }
 
-export function SingaporeMap({ pabs: propPabs, onStatsLoaded, isResizing = false }: Props) {
+export function SingaporeMap({
+  pabs: propPabs,
+  onStatsLoaded,
+  isResizing = false,
+}: Props) {
   const mapRef = useRef<MapRef>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const lastResizeAtRef = useRef(0);
@@ -125,14 +131,26 @@ export function SingaporeMap({ pabs: propPabs, onStatsLoaded, isResizing = false
     if (propPabs) return;
     fetch("/api/pabs")
       .then((r) => r.json())
-      .then((data: { markers: PABMarker[]; stationary: number; ongoing: number }) => {
-        setFetchedPabs(data.markers);
-        onStatsLoaded?.({ stationary: data.stationary, ongoing: data.ongoing });
-      })
+      .then(
+        (data: {
+          markers: PABMarker[];
+          stationary: number;
+          ongoing: number;
+        }) => {
+          setFetchedPabs(data.markers);
+          onStatsLoaded?.({
+            stationary: data.stationary,
+            ongoing: data.ongoing,
+          });
+        },
+      )
       .catch(() => {});
   }, [propPabs, onStatsLoaded]);
 
-  const pabs = propPabs ?? fetchedPabs ?? [];
+  const pabs = useMemo(
+    () => propPabs ?? fetchedPabs ?? [],
+    [propPabs, fetchedPabs],
+  );
 
   const allGeojson = useMemo<GeoJSON.FeatureCollection>(
     () => ({
@@ -160,11 +178,14 @@ export function SingaporeMap({ pabs: propPabs, onStatsLoaded, isResizing = false
       const clusterId = feature.properties?.cluster_id as number;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const source = mapRef.current?.getSource("pabs") as any;
-      source?.getClusterExpansionZoom(clusterId, (err: Error | null, zoom: number | null) => {
-        if (err || zoom === null) return;
-        const coords = (feature.geometry as GeoJSON.Point).coordinates;
-        mapRef.current?.easeTo({ center: [coords[0], coords[1]], zoom });
-      });
+      source?.getClusterExpansionZoom(
+        clusterId,
+        (err: Error | null, zoom: number | null) => {
+          if (err || zoom === null) return;
+          const coords = (feature.geometry as GeoJSON.Point).coordinates;
+          mapRef.current?.easeTo({ center: [coords[0], coords[1]], zoom });
+        },
+      );
     } else if (feature.layer?.id === "unclustered-point") {
       const props = feature.properties!;
       const coords = (feature.geometry as GeoJSON.Point).coordinates;
@@ -227,7 +248,10 @@ export function SingaporeMap({ pabs: propPabs, onStatsLoaded, isResizing = false
   }, [isMapReady, isResizing]);
 
   return (
-    <div ref={containerRef} className="relative w-full h-full min-w-0 overflow-hidden">
+    <div
+      ref={containerRef}
+      className="relative w-full h-full min-w-0 overflow-hidden"
+    >
       <Map
         ref={mapRef}
         initialViewState={INITIAL_VIEW}
@@ -269,17 +293,26 @@ export function SingaporeMap({ pabs: propPabs, onStatsLoaded, isResizing = false
             closeOnClick={false}
             offset={14}
           >
-            <div className="p-1 min-w-[180px]">
+            <div className="p-1 min-w-45">
               <div className="flex items-center gap-1.5 mb-1.5">
                 <MapPin className="w-3.5 h-3.5 text-slate-500" />
-                <span className="text-xs font-semibold text-slate-800">{popupInfo.name}</span>
+                <span className="text-xs font-semibold text-slate-800">
+                  {popupInfo.name}
+                </span>
               </div>
               {popupInfo.address && (
-                <p className="text-xs text-slate-500 mb-2">{popupInfo.address}</p>
+                <p className="text-xs text-slate-500 mb-2">
+                  {popupInfo.address}
+                </p>
               )}
               <div className="flex items-center justify-between">
                 <span className="text-xs text-slate-500">Status</span>
-                <span className={cn("text-xs font-medium px-2 py-0.5 rounded-full", statusConfig[popupInfo.status].badge)}>
+                <span
+                  className={cn(
+                    "text-xs font-medium px-2 py-0.5 rounded-full",
+                    statusConfig[popupInfo.status].badge,
+                  )}
+                >
                   {statusConfig[popupInfo.status].label}
                 </span>
               </div>
@@ -329,7 +362,9 @@ export function SingaporeMap({ pabs: propPabs, onStatsLoaded, isResizing = false
             <span className="text-slate-600">Offline PAB</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className="w-5 h-5 rounded-full border-2 border-white shadow-[0_0_0_1.5px_#ef4444] flex items-center justify-center bg-red-500 text-[8px] text-white font-bold">n</div>
+            <div className="w-5 h-5 rounded-full border-2 border-white shadow-[0_0_0_1.5px_#ef4444] flex items-center justify-center bg-red-500 text-[8px] text-white font-bold">
+              n
+            </div>
             <span className="text-slate-600">Cluster — red if any call</span>
           </div>
         </div>

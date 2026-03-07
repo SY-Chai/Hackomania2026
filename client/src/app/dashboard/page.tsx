@@ -18,7 +18,7 @@ async function DashboardContent() {
 function DashboardSkeleton() {
   return (
     <div className="flex h-full overflow-hidden animate-pulse">
-      <div className="w-[700px] shrink-0 border-r border-slate-200 bg-white p-4 space-y-4">
+      <div className="w-175 shrink-0 border-r border-slate-200 bg-white p-4 space-y-4">
         <div className="h-5 w-32 bg-slate-200 rounded" />
         <div className="h-8 w-full bg-slate-100 rounded" />
         {Array.from({ length: 6 }).map((_, i) => (

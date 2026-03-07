@@ -19,25 +19,23 @@ type ChatMessage = {
 function ButtonPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const [pabId, setPabId] = useState<string | null>(null);
+  const paramPabId = searchParams.get("pab_id");
+  const [fetchedPabId, setFetchedPabId] = useState<string | null>(null);
+  const pabId = paramPabId ?? fetchedPabId;
 
   useEffect(() => {
-    const param = searchParams.get("pab_id");
-    if (param) {
-      setPabId(param);
-      return;
-    }
+    if (paramPabId) return;
     // No pab_id in URL — fetch a default PAB ID and reflect it in the URL
     fetch("/api/pab-default")
       .then((r) => r.json())
       .then((data: { id: string | null }) => {
         if (data.id) {
-          setPabId(data.id);
+          setFetchedPabId(data.id);
           router.replace(`?pab_id=${data.id}`);
         }
       })
       .catch(() => {});
-  }, [searchParams, router]);
+  }, [paramPabId, router]);
 
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -65,7 +63,11 @@ function ButtonPageContent() {
   }, []);
 
   const schedulePlayback = useCallback((pcmChunk: Int16Array) => {
-    schedulePcm16Playback(playbackAudioContextRef.current, nextPlaybackTimeRef, pcmChunk);
+    schedulePcm16Playback(
+      playbackAudioContextRef.current,
+      nextPlaybackTimeRef,
+      pcmChunk,
+    );
   }, []);
 
   const stopMicrophoneCapture = useCallback(() => {
@@ -74,7 +76,7 @@ function ButtonPageContent() {
       sourceRef.current?.disconnect();
       processorRef.current = null;
       sourceRef.current = null;
-    } catch { }
+    } catch {}
 
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -82,7 +84,7 @@ function ButtonPageContent() {
     }
 
     if (inputAudioContextRef.current) {
-      inputAudioContextRef.current.close().catch(() => { });
+      inputAudioContextRef.current.close().catch(() => {});
       inputAudioContextRef.current = null;
     }
   }, []);
@@ -94,7 +96,7 @@ function ButtonPageContent() {
     stopPlaybackLoop();
 
     if (playbackAudioContextRef.current) {
-      playbackAudioContextRef.current.close().catch(() => { });
+      playbackAudioContextRef.current.close().catch(() => {});
       playbackAudioContextRef.current = null;
     }
 
@@ -110,48 +112,56 @@ function ButtonPageContent() {
     setStatus("Disconnected");
   }, [stopMicrophoneCapture, stopPlaybackLoop]);
 
-  const startMicrophoneCapture = useCallback(async (socket: Socket) => {
-    console.log("🎤 WS DEBUG: requesting microphone");
+  const startMicrophoneCapture = useCallback(
+    async (socket: Socket) => {
+      console.log("🎤 WS DEBUG: requesting microphone");
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          noiseSuppression: true,
-          echoCancellation: true,
-          autoGainControl: true,
-          channelCount: 1,
-        },
-      });
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            noiseSuppression: true,
+            echoCancellation: true,
+            autoGainControl: true,
+            channelCount: 1,
+          },
+        });
 
-      mediaStreamRef.current = stream;
+        mediaStreamRef.current = stream;
 
-      const audioContext = new AudioContext();
-      inputAudioContextRef.current = audioContext;
+        const audioContext = new AudioContext();
+        inputAudioContextRef.current = audioContext;
 
-      const source = audioContext.createMediaStreamSource(stream);
-      sourceRef.current = source;
+        const source = audioContext.createMediaStreamSource(stream);
+        sourceRef.current = source;
 
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
-      processorRef.current = processor;
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        processorRef.current = processor;
 
-      source.connect(processor);
-      processor.connect(audioContext.destination);
+        source.connect(processor);
+        processor.connect(audioContext.destination);
 
-      processor.onaudioprocess = (event) => {
-        const input = event.inputBuffer.getChannelData(0);
-        const copied = new Float32Array(input);
-        const pcm16 = resampleTo24k(copied, audioContext.sampleRate);
+        processor.onaudioprocess = (event) => {
+          const input = event.inputBuffer.getChannelData(0);
+          const copied = new Float32Array(input);
+          const pcm16 = resampleTo24k(copied, audioContext.sampleRate);
 
-        socket.emit("client_audio", pcm16.buffer);
-      };
+          socket.emit("client_audio", pcm16.buffer);
+        };
 
-      console.log("🎤 WS DEBUG: microphone streaming started at", audioContext.sampleRate);
-    } catch (err) {
-      console.error("Microphone access denied:", err);
-      setError("Microphone access is required to use the emergency voice assistant.");
-      stopConversation();
-    }
-  }, [stopConversation]);
+        console.log(
+          "🎤 WS DEBUG: microphone streaming started at",
+          audioContext.sampleRate,
+        );
+      } catch (err) {
+        console.error("Microphone access denied:", err);
+        setError(
+          "Microphone access is required to use the emergency voice assistant.",
+        );
+        stopConversation();
+      }
+    },
+    [stopConversation],
+  );
 
   const startConversation = useCallback(() => {
     console.log("🔎 WS DEBUG: startConversation triggered");
@@ -175,12 +185,13 @@ function ButtonPageContent() {
     socketRef.current = socket;
 
     socket.on("connect", () => {
-      console.log(`✅ WS DEBUG: Connected to backend Socket.IO. Sending PAB ID: ${pabId}`);
+      console.log(
+        `✅ WS DEBUG: Connected to backend Socket.IO. Sending PAB ID: ${pabId}`,
+      );
       socket.emit("start_emergency_session", { pab_id: pabId });
     });
 
     socket.on("session_started", () => {
-
       console.log("✅ WS DEBUG: OpenAI emergency session started");
       setStatus("Connected — speak now");
       setIsConnected(true);
@@ -232,7 +243,6 @@ function ButtonPageContent() {
       setStatus("Failed to connect");
       stopConversation();
     });
-
   }, [
     pabId,
     isConnected,
@@ -269,12 +279,13 @@ function ButtonPageContent() {
 
           <div className="flex items-center gap-3 border-b border-slate-200 px-6 py-4 text-sm">
             <div
-              className={`h-2.5 w-2.5 rounded-full ${isConnected
-                ? "bg-green-500"
-                : isConnecting
-                  ? "bg-yellow-500"
-                  : "bg-slate-300"
-                }`}
+              className={`h-2.5 w-2.5 rounded-full ${
+                isConnected
+                  ? "bg-green-500"
+                  : isConnecting
+                    ? "bg-yellow-500"
+                    : "bg-slate-300"
+              }`}
             />
             <span className="text-slate-700">{status}</span>
           </div>
@@ -287,16 +298,18 @@ function ButtonPageContent() {
               return (
                 <div
                   key={message.id}
-                  className={`max-w-[85%] rounded px-4 py-3 text-sm leading-6 ${isUser
-                    ? "ml-auto bg-slate-900 text-white"
-                    : isUser
-                      ? "bg-slate-100 text-slate-900 border border-slate-200"
-                      : "bg-white text-slate-600 border border-slate-200"
-                    }`}
+                  className={`max-w-[85%] rounded px-4 py-3 text-sm leading-6 ${
+                    isUser
+                      ? "ml-auto bg-slate-900 text-white"
+                      : isUser
+                        ? "bg-slate-100 text-slate-900 border border-slate-200"
+                        : "bg-white text-slate-600 border border-slate-200"
+                  }`}
                 >
                   <div
-                    className={`mb-1 text-xs font-medium uppercase tracking-wide ${isUser ? "text-slate-400" : "text-slate-400"
-                      }`}
+                    className={`mb-1 text-xs font-medium uppercase tracking-wide ${
+                      isUser ? "text-slate-400" : "text-slate-400"
+                    }`}
                   >
                     {isUser ? "User" : isAgent ? "AI Agent" : "System"}
                   </div>
@@ -323,7 +336,8 @@ function ButtonPageContent() {
               Press to start voice help
             </h2>
             <p className="mt-2 max-w-sm text-sm text-slate-500">
-              The button starts a live voice session with the AI emergency assistant.
+              The button starts a live voice session with the AI emergency
+              assistant.
             </p>
           </div>
 
@@ -350,14 +364,22 @@ function ButtonPageContent() {
           </Button>
 
           <div className="max-w-sm rounded border border-slate-200 bg-white p-4 text-sm text-slate-700">
-            <div className="mb-2 font-medium text-slate-900">System Architecture</div>
+            <div className="mb-2 font-medium text-slate-900">
+              System Architecture
+            </div>
             <p className="mb-2">
-              This version securely proxies bidirectional audio via WebSockets on the Node.js backend. The frontend captures audio, streams to the backend, and the backend communicates with OpenAI.
+              This version securely proxies bidirectional audio via WebSockets
+              on the Node.js backend. The frontend captures audio, streams to
+              the backend, and the backend communicates with OpenAI.
             </p>
             {pabId ? (
-              <p className="font-semibold text-blue-600 break-all">Active PAB ID: {pabId}</p>
+              <p className="font-semibold text-blue-600 break-all">
+                Active PAB ID: {pabId}
+              </p>
             ) : (
-              <p className="text-slate-400">No specific PAB specified for this test.</p>
+              <p className="text-slate-400">
+                No specific PAB specified for this test.
+              </p>
             )}
           </div>
         </aside>
@@ -368,12 +390,14 @@ function ButtonPageContent() {
 
 export default function Page() {
   return (
-    <Suspense fallback={
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-500">
-        <Loader2 className="mr-2 h-6 w-6 animate-spin" />
-        Loading...
-      </div>
-    }>
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-500">
+          <Loader2 className="mr-2 h-6 w-6 animate-spin" />
+          Loading...
+        </div>
+      }
+    >
       <ButtonPageContent />
     </Suspense>
   );

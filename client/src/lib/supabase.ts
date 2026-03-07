@@ -63,8 +63,9 @@ export async function fetchConversations(): Promise<DBConversation[]> {
 }
 
 const CONVERSATION_COLS =
-  "id,start,end,triage,classification,severity,severity_conf,severity_reason";
-const MESSAGE_COLS = "id,author_id,content,timestamp,conversation_id,users(type)";
+  "id,start,end,triage,classification,severity,severity_conf,severity_reason,summary,audio_url";
+const MESSAGE_COLS =
+  "id,author_id,content,timestamp,conversation_id,users(type)";
 
 export async function fetchConversationsWithMessages(): Promise<
   (DBConversation & { messages: DBMessage[] })[]
@@ -75,7 +76,9 @@ export async function fetchConversationsWithMessages(): Promise<
     .order("start", { ascending: false });
 
   if (error) throw error;
-  return (data ?? []) as (DBConversation & { messages: DBMessage[] })[];
+  return (data ?? []) as unknown as (DBConversation & {
+    messages: DBMessage[];
+  })[];
 }
 
 export async function fetchUsers(): Promise<DBUser[]> {
