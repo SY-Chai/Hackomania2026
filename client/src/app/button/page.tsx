@@ -5,6 +5,8 @@ import { AlertCircle, Loader2, Mic, PhoneOff } from "lucide-react";
 import { io, Socket } from "socket.io-client";
 
 import { Button } from "@/components/ui/button";
+import { resolveSocketServerUrl } from "@/lib/socket";
+import { resampleTo24k, schedulePcm16Playback } from "@/lib/audio";
 
 type ChatMessage = {
   id: string;
@@ -12,54 +14,6 @@ type ChatMessage = {
   text: string;
 };
 
-const SOCKET_SERVER_URL =
-  process.env.NEXT_PUBLIC_SOCKET_SERVER_URL;
-
-function resolveSocketServerUrl() {
-  if (SOCKET_SERVER_URL) return SOCKET_SERVER_URL;
-  if (typeof window === "undefined") return "http://localhost:3001";
-  const protocol = window.location.protocol === "https:" ? "https" : "http";
-  return `${protocol}://${window.location.hostname}:3001`;
-}
-
-function float32ToInt16(float32: Float32Array): Int16Array {
-  const int16 = new Int16Array(float32.length);
-  for (let i = 0; i < float32.length; i++) {
-    const s = Math.max(-1, Math.min(1, float32[i]));
-    int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-  }
-  return int16;
-}
-
-function resampleTo24k(input: Float32Array, inputSampleRate: number): Int16Array {
-  if (inputSampleRate === 24000) {
-    return float32ToInt16(input);
-  }
-
-  const ratio = inputSampleRate / 24000;
-  const newLength = Math.round(input.length / ratio);
-  const result = new Float32Array(newLength);
-
-  let offsetResult = 0;
-  let offsetBuffer = 0;
-
-  while (offsetResult < result.length) {
-    const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
-    let accum = 0;
-    let count = 0;
-
-    for (let i = offsetBuffer; i < nextOffsetBuffer && i < input.length; i++) {
-      accum += input[i];
-      count++;
-    }
-
-    result[offsetResult] = count > 0 ? accum / count : 0;
-    offsetResult++;
-    offsetBuffer = nextOffsetBuffer;
-  }
-
-  return float32ToInt16(result);
-}
 
 export default function Page() {
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -87,36 +41,8 @@ export default function Page() {
     nextPlaybackTimeRef.current = 0;
   }, []);
 
-  const schedulePcm16Playback = useCallback((pcmChunk: Int16Array) => {
-    const ctx = playbackAudioContextRef.current;
-    if (!ctx || pcmChunk.length === 0) return;
-
-    const audioBuffer = ctx.createBuffer(1, pcmChunk.length, 24000);
-    const channel = audioBuffer.getChannelData(0);
-
-    for (let i = 0; i < pcmChunk.length; i++) {
-      channel[i] = pcmChunk[i] / 32768;
-    }
-
-    const source = ctx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(ctx.destination);
-
-    const now = ctx.currentTime;
-    const startTime =
-      nextPlaybackTimeRef.current > now ? nextPlaybackTimeRef.current : now;
-
-    source.start(startTime);
-
-    nextPlaybackTimeRef.current = startTime + audioBuffer.duration;
-
-    console.log(
-      "🔊 WS DEBUG: scheduled chunk",
-      `samples=${pcmChunk.length}`,
-      `duration=${audioBuffer.duration.toFixed(3)}s`,
-      `start=${startTime.toFixed(3)}`,
-      `next=${nextPlaybackTimeRef.current.toFixed(3)}`
-    );
+  const schedulePlayback = useCallback((pcmChunk: Int16Array) => {
+    schedulePcm16Playback(playbackAudioContextRef.current, nextPlaybackTimeRef, pcmChunk);
   }, []);
 
   const stopMicrophoneCapture = useCallback(() => {
@@ -241,7 +167,7 @@ export default function Page() {
     socket.on("server_audio", (buffer: ArrayBuffer) => {
       // The backend sends a Node.js Buffer, which arrives as an ArrayBuffer in the browser
       const pcmChunk = new Int16Array(buffer);
-      schedulePcm16Playback(pcmChunk);
+      schedulePlayback(pcmChunk);
     });
 
     socket.on("history_updated", (newMessages: ChatMessage[]) => {
@@ -286,7 +212,7 @@ export default function Page() {
   }, [
     isConnected,
     isConnecting,
-    schedulePcm16Playback,
+    schedulePlayback,
     startMicrophoneCapture,
     stopConversation,
   ]);
