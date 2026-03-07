@@ -427,8 +427,7 @@ class SpeechToSpeechAgent:
         stream = self.openai.chat.completions.create(
             model=LLM_MODEL,
             messages=messages,
-            max_tokens=300,
-            temperature=0.7,
+            temperature=0.3,
             stream=True,
         )
         full_text = ""
@@ -793,9 +792,13 @@ class SpeechToSpeechAgent:
                                 hist_snapshot, lang, lc_snapshot, session_prompt
                             ):
                                 if d:
-                                    loop.call_soon_threadsafe(llm_queue.put_nowait, ("delta", d))
+                                    loop.call_soon_threadsafe(
+                                        llm_queue.put_nowait, ("delta", d)
+                                    )
                                 full = f
-                            loop.call_soon_threadsafe(llm_queue.put_nowait, ("done", full))
+                            loop.call_soon_threadsafe(
+                                llm_queue.put_nowait, ("done", full)
+                            )
 
                         llm_task = loop.run_in_executor(None, _produce_llm)
 
@@ -830,9 +833,15 @@ class SpeechToSpeechAgent:
                         tts_queue: asyncio.Queue = asyncio.Queue()
 
                         def _produce_tts():
-                            for pcm_chunk in self._stream_tts(llm_full, voice=session_voice):
-                                loop.call_soon_threadsafe(tts_queue.put_nowait, pcm_chunk)
-                            loop.call_soon_threadsafe(tts_queue.put_nowait, None)  # sentinel
+                            for pcm_chunk in self._stream_tts(
+                                llm_full, voice=session_voice
+                            ):
+                                loop.call_soon_threadsafe(
+                                    tts_queue.put_nowait, pcm_chunk
+                                )
+                            loop.call_soon_threadsafe(
+                                tts_queue.put_nowait, None
+                            )  # sentinel
 
                         tts_task = loop.run_in_executor(None, _produce_tts)
 
