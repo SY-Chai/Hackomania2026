@@ -29,7 +29,9 @@ export function parseOperatorSummary(
 
   try {
     const parsed =
-      typeof raw === "string" ? JSON.parse(raw) : (raw as Record<string, unknown>);
+      typeof raw === "string"
+        ? JSON.parse(raw)
+        : (raw as Record<string, unknown>);
     if (!parsed || typeof parsed !== "object") return null;
 
     const asArray = (value: unknown) =>
@@ -52,9 +54,15 @@ export function parseOperatorSummary(
 
     return {
       incident_overview: incident_overview || "No overview available yet.",
-      key_symptoms: asArray((parsed as { key_symptoms?: unknown }).key_symptoms),
-      risk_factors: asArray((parsed as { risk_factors?: unknown }).risk_factors),
-      actions_taken: asArray((parsed as { actions_taken?: unknown }).actions_taken),
+      key_symptoms: asArray(
+        (parsed as { key_symptoms?: unknown }).key_symptoms,
+      ),
+      risk_factors: asArray(
+        (parsed as { risk_factors?: unknown }).risk_factors,
+      ),
+      actions_taken: asArray(
+        (parsed as { actions_taken?: unknown }).actions_taken,
+      ),
       recommended_next_step:
         recommended_next_step || "Continue monitoring and gather more details.",
     };
@@ -118,6 +126,7 @@ export function toUIConversations(
       operatorSummary: parseOperatorSummary(c.summary),
       startedAt: c.start,
       lastActivity: lastMsg?.timestamp ?? c.start,
+      end: c.end,
       messages,
     };
   });

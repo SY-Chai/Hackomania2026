@@ -156,7 +156,11 @@ async function assessConversationSeverity(turns) {
                 type: "object",
                 additionalProperties: false,
                 properties: {
-                  incident_overview: { type: "string", minLength: 1, maxLength: 240 },
+                  incident_overview: {
+                    type: "string",
+                    minLength: 1,
+                    maxLength: 240,
+                  },
                   key_symptoms: {
                     type: "array",
                     items: { type: "string", minLength: 1, maxLength: 120 },
@@ -489,7 +493,9 @@ export function setupSocket(io) {
         }
       }
 
-      const agentUrl = USE_MODAL_AGENT ? MODAL_AGENT_WS_URL : OPENAI_REALTIME_URL;
+      const agentUrl = USE_MODAL_AGENT
+        ? MODAL_AGENT_WS_URL
+        : OPENAI_REALTIME_URL;
       const agentHeaders = USE_MODAL_AGENT
         ? {}
         : {
@@ -580,7 +586,10 @@ export function setupSocket(io) {
         try {
           const event = JSON.parse(message.toString());
           // Log non-streaming events (skip noisy audio/transcript deltas)
-          if (event.type !== "response.audio.delta" && event.type !== "response.audio_transcript.delta") {
+          if (
+            event.type !== "response.audio.delta" &&
+            event.type !== "response.audio_transcript.delta"
+          ) {
             console.log(`[Socket ${socket.id}] ← agent: ${event.type}`);
           }
 
@@ -787,7 +796,10 @@ export function setupSocket(io) {
       const isOperator = session.operatorSocketId === socket.id;
       const isCaller = session.callerSocketId === socket.id;
       if (!isOperator && !isCaller) {
-        socket.emit("operator_takeover_error", "Not authorized to end this call.");
+        socket.emit(
+          "operator_takeover_error",
+          "Not authorized to end this call.",
+        );
         return;
       }
 
@@ -809,7 +821,9 @@ export function setupSocket(io) {
         }
       }
 
-      io.to(conversationId).emit("operator_takeover_stopped", { conversationId });
+      io.to(conversationId).emit("operator_takeover_stopped", {
+        conversationId,
+      });
     });
 
     // ------------------------------------------------------------------
@@ -886,15 +900,21 @@ export function setupSocket(io) {
       const { conversationId, audio } = payload || {};
       if (!conversationId || !audio) return;
 
-      console.log(`[SOCKET DEBUG] Received operator_audio for conv ${conversationId}, audio length: ${audio.byteLength || audio.length}`);
+      console.log(
+        `[SOCKET DEBUG] Received operator_audio for conv ${conversationId}, audio length: ${audio.byteLength || audio.length}`,
+      );
 
       const session = liveConversationSessions.get(conversationId);
       if (!session) {
-        console.log(`[SOCKET DEBUG] Session not found for conv ${conversationId}`);
+        console.log(
+          `[SOCKET DEBUG] Session not found for conv ${conversationId}`,
+        );
         return;
       }
       if (!session.takeoverActive || session.operatorSocketId !== socket.id) {
-        console.log(`[SOCKET DEBUG] Takeover inactive or wrong socket: active=${session.takeoverActive}, opSocket=${session.operatorSocketId}, mySocket=${socket.id}`);
+        console.log(
+          `[SOCKET DEBUG] Takeover inactive or wrong socket: active=${session.takeoverActive}, opSocket=${session.operatorSocketId}, mySocket=${socket.id}`,
+        );
         return;
       }
 

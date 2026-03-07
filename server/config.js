@@ -3,15 +3,15 @@ import { S3Client } from "@aws-sdk/client-s3";
 
 // Supabase
 const supabaseUrl = process.env.SUPABASE_URL || "";
-const supabaseKey =
-  process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_ANON_KEY || "";
+const supabaseKey = process.env.SUPABASE_SECRET_KEY || "";
 
 if (!supabaseUrl || !supabaseKey) {
-  console.warn("Missing SUPABASE_URL or SUPABASE_SECRET_KEY environment variables.");
+  console.warn(
+    "Missing SUPABASE_URL or SUPABASE_SECRET_KEY environment variables.",
+  );
 }
-export const supabase = supabaseUrl && supabaseKey
-  ? createClient(supabaseUrl, supabaseKey)
-  : null;
+export const supabase =
+  supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 if (supabase) console.log("Supabase client initialized");
 
 // Cloudflare R2

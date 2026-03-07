@@ -30,6 +30,7 @@ import {
   ChevronDown,
   ChevronUp,
   ClipboardList,
+  CheckCheck,
 } from "lucide-react";
 
 // --- Types derived from Supabase data ---
@@ -61,6 +62,7 @@ export interface UIConversation {
   operatorSummary: OperatorSummary | null;
   startedAt: string | null;
   lastActivity: string | null;
+  end: string | null;
   messages: UIMessage[];
 }
 
@@ -129,7 +131,7 @@ function getInitials(name: string) {
     .toUpperCase();
 }
 
-type FilterTab = "all" | "triage" | "diagnosis";
+type FilterTab = "all" | "urgent" | "uncertain" | "non_urgent" | "resolved";
 type LiveSpeaker = "user" | "agent";
 type TakeoverEvent = {
   conversationId: string;
@@ -197,6 +199,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const [takeoverError, setTakeoverError] = useState<string | null>(null);
   const [isEndingConversation, setIsEndingConversation] = useState(false);
   const [isSummaryOpen, setIsSummaryOpen] = useState(true);
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
 
   const listenerSocketRef = useRef<Socket | null>(null);
   const playbackAudioContextRef = useRef<AudioContext | null>(null);
@@ -375,6 +378,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
             operatorSummary: parseOperatorSummary(c.summary),
             startedAt: c.start,
             lastActivity: c.start,
+            end: c.end,
             messages: [],
           },
           ...prev,
@@ -395,6 +399,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 severityConf: c.severity_conf,
                 severityReason: c.severity_reason,
                 operatorSummary: parseOperatorSummary(c.summary),
+                end: c.end,
               }
             : conv,
         ),
@@ -517,7 +522,11 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
       setTakeoverConversationId(null);
       setIsEndingConversation(false);
       setTakeoverError(message || "Failed to start operator takeover.");
-      setLiveAudioStatus("Listening live");
+      setLiveAudioStatus(
+        joinedConversationIdRef.current === listenTargetId
+          ? "Listening live"
+          : "Live audio off",
+      );
     });
 
     socket.on("connect_error", () => {
@@ -589,19 +598,36 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const filtered =
     filter === "all"
       ? orderedConversations
-      : orderedConversations.filter((c) => c.phase === filter);
+      : filter === "resolved"
+        ? orderedConversations.filter((c) => !!c.end)
+        : orderedConversations.filter((c) => !c.end && c.severity === filter);
 
   const tabs: { key: FilterTab; label: string; count: number }[] = [
     { key: "all", label: "All", count: liveConversations.length },
     {
-      key: "triage",
-      label: "Triage",
-      count: liveConversations.filter((c) => c.phase === "triage").length,
+      key: "urgent",
+      label: "Urgent",
+      count: liveConversations.filter((c) => !c.end && c.severity === "urgent")
+        .length,
     },
     {
-      key: "diagnosis",
-      label: "Diagnosis",
-      count: liveConversations.filter((c) => c.phase === "diagnosis").length,
+      key: "uncertain",
+      label: "Uncertain",
+      count: liveConversations.filter(
+        (c) => !c.end && c.severity === "uncertain",
+      ).length,
+    },
+    {
+      key: "non_urgent",
+      label: "Non-urgent",
+      count: liveConversations.filter(
+        (c) => !c.end && c.severity === "non_urgent",
+      ).length,
+    },
+    {
+      key: "resolved",
+      label: "Resolved",
+      count: liveConversations.filter((c) => !!c.end).length,
     },
   ];
 
@@ -632,9 +658,6 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
             <h1 className="text-sm font-semibold text-slate-900">
               Conversations
             </h1>
-            <p className="text-xs text-slate-500 mt-0.5">
-              {liveConversations.length} total
-            </p>
           </div>
           {onCollapse && (
             <button
@@ -646,31 +669,18 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
           )}
         </div>
 
-        <div className="flex border-b border-slate-100 px-4">
-          {tabs.map(({ key, label, count }) => (
-            <button
-              key={key}
-              onClick={() => setFilter(key)}
-              className={cn(
-                "flex items-center gap-1.5 px-1 py-3 text-xs font-medium border-b-2 mr-4 transition-colors",
-                filter === key
-                  ? "border-slate-900 text-slate-900"
-                  : "border-transparent text-slate-500 hover:text-slate-700",
-              )}
-            >
-              {label}
-              <span
-                className={cn(
-                  "text-[10px] font-semibold px-1.5 py-0.5 rounded",
-                  filter === key
-                    ? "bg-slate-900 text-white"
-                    : "bg-slate-100 text-slate-500",
-                )}
-              >
-                {count}
-              </span>
-            </button>
-          ))}
+        <div className="px-4 py-2 border-b border-slate-100">
+          <select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value as FilterTab)}
+            className="w-full text-xs font-medium px-2 py-1.5 rounded border border-slate-200 bg-white text-slate-700 cursor-pointer"
+          >
+            {tabs.map(({ key, label, count }) => (
+              <option key={key} value={key}>
+                {label} ({count})
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="flex-1 overflow-y-auto min-h-0">
@@ -679,82 +689,110 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               const displayName = getDisplayName(conv);
               const lastMsg = conv.messages[conv.messages.length - 1];
               return (
-                <button
+                <div
                   key={conv.id}
-                  onClick={() => {
-                    setSelectedId(conv.id);
-                    if (listenTargetId && listenTargetId !== conv.id) {
-                      listenerSocketRef.current?.emit(
-                        "operator_takeover_stop",
-                        listenTargetId,
-                      );
-                      stopOperatorMicrophoneCapture();
-                      setLiveAudioStatus("Live audio off");
-                      setLiveAudioError(null);
-                      setIsAudioConnecting(false);
-                      pendingTakeoverConversationIdRef.current = null;
-                      setPendingTakeoverConversationId(null);
-                      setTakeoverConversationId(null);
-                      setTakeoverError(null);
-                      setListenTargetId(null);
-                    }
-                  }}
                   className={cn(
-                    "w-full text-left px-4 py-3 transition-colors border-b border-slate-50 last:border-0",
+                    "w-full text-left px-4 py-3 transition-colors border-b border-slate-50 last:border-0 group relative",
                     selected.id === conv.id
                       ? "bg-slate-50"
                       : "hover:bg-slate-50/60",
                   )}
                 >
-                  <div className="flex items-start gap-3">
-                    <Avatar className="w-8 h-8 shrink-0 mt-0.5">
-                      <AvatarFallback className="text-[10px] bg-slate-200 text-slate-600 font-semibold">
-                        {getInitials(displayName)}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <p className="text-xs font-semibold text-slate-900 truncate">
-                          {displayName}
-                        </p>
-                        <span className="text-[10px] text-slate-400 shrink-0">
-                          {formatTime(conv.lastActivity)}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span
-                          className={cn(
-                            "text-[10px] font-medium px-1.5 py-0.5 rounded border",
-                            phaseConfig[conv.phase].className,
-                          )}
-                        >
-                          {phaseConfig[conv.phase].label}
-                        </span>
-                        {conv.severity && (
+                  <button
+                    className="w-full text-left"
+                    onClick={() => {
+                      setSelectedId(conv.id);
+                      if (listenTargetId && listenTargetId !== conv.id) {
+                        listenerSocketRef.current?.emit(
+                          "operator_takeover_stop",
+                          listenTargetId,
+                        );
+                        stopOperatorMicrophoneCapture();
+                        setLiveAudioStatus("Live audio off");
+                        setLiveAudioError(null);
+                        setIsAudioConnecting(false);
+                        pendingTakeoverConversationIdRef.current = null;
+                        setPendingTakeoverConversationId(null);
+                        setTakeoverConversationId(null);
+                        setTakeoverError(null);
+                        setListenTargetId(null);
+                      }
+                    }}
+                  >
+                    <div className="flex items-start gap-3">
+                      <Avatar className="w-8 h-8 shrink-0 mt-0.5">
+                        <AvatarFallback className="text-[10px] bg-slate-200 text-slate-600 font-semibold">
+                          {getInitials(displayName)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <p className="text-xs font-semibold text-slate-900 truncate">
+                            {displayName}
+                          </p>
+                          <span className="text-[10px] text-slate-400 shrink-0">
+                            {formatTime(conv.lastActivity)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <span
-                            title={conv.severityReason ?? undefined}
                             className={cn(
                               "text-[10px] font-medium px-1.5 py-0.5 rounded border",
-                              severityConfig[conv.severity].className,
+                              phaseConfig[conv.phase].className,
                             )}
                           >
-                            {severityConfig[conv.severity].label}
+                            {phaseConfig[conv.phase].label}
                           </span>
-                        )}
-                        {/* {conv.classification && (
-                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded border bg-slate-100 text-slate-600 border-slate-200">
-                            {conv.classification}
-                          </span>
-                        )} */}
+                          {conv.severity && !conv.end && (
+                            <span
+                              title={conv.severityReason ?? undefined}
+                              className={cn(
+                                "text-[10px] font-medium px-1.5 py-0.5 rounded border",
+                                severityConfig[conv.severity].className,
+                              )}
+                            >
+                              {severityConfig[conv.severity].label}
+                            </span>
+                          )}
+                          {conv.end && (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded border bg-slate-100 text-slate-500 border-slate-200">
+                              Resolved
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      {lastMsg && (
-                        <p className="text-xs text-slate-400 mt-1 truncate">
-                          {lastMsg.content}
-                        </p>
-                      )}
                     </div>
-                  </div>
-                </button>
+                  </button>
+                  {!conv.end && (
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        setResolvingId(conv.id);
+                        try {
+                          await fetch(`/api/conversations/${conv.id}/resolve`, { method: "POST" });
+                          setLiveConversations((prev) =>
+                            prev.map((c) =>
+                              c.id === conv.id
+                                ? { ...c, end: new Date().toISOString() }
+                                : c,
+                            ),
+                          );
+                        } finally {
+                          setResolvingId(null);
+                        }
+                      }}
+                      disabled={resolvingId === conv.id}
+                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50 disabled:opacity-50"
+                    >
+                      {resolvingId === conv.id ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <CheckCheck className="w-3 h-3" />
+                      )}
+                      Resolve
+                    </button>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -813,9 +851,9 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 </span>
               )}
             </div>
-            <div className="flex flex-wrap items-center justify-start gap-2">
+            <div className="flex items-center gap-2">
               <Button
-                className="min-w-35 justify-center"
+                className="flex-1 justify-center"
                 variant={isListeningSelected ? "destructive" : "outline"}
                 size="sm"
                 onClick={() => {
@@ -856,12 +894,12 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 ) : (
                   <>
                     <Headphones className="w-3.5 h-3.5" />
-                    Listen live
+                    Listen in
                   </>
                 )}
               </Button>
               <Button
-                className="min-w-[140px] justify-center"
+                className="flex-1 justify-center"
                 variant={isTakeoverSelected ? "destructive" : "default"}
                 size="sm"
                 onClick={() => {
@@ -920,13 +958,15 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 )}
               </Button>
               <Button
-                className="min-w-[160px] justify-center"
+                className="flex-1 justify-center"
                 variant="destructive"
                 size="sm"
                 onClick={() => {
                   const socket = listenerSocketRef.current;
                   if (!isListeningSelected || !socket?.connected) {
-                    setTakeoverError("Start listen live before ending the conversation.");
+                    setTakeoverError(
+                      "Start listen live before ending the conversation.",
+                    );
                     return;
                   }
 
