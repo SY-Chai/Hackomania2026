@@ -227,9 +227,9 @@ export default function Page() {
   }, [stopConversation]);
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[1.25fr_0.75fr]">
-        <section className="flex flex-col border-b border-slate-200 lg:border-r lg:border-b-0">
+    <main className="min-h-screen bg-slate-50 text-slate-900 lg:h-screen lg:overflow-hidden">
+      <div className="grid min-h-screen grid-cols-1 lg:h-full lg:min-h-0 lg:grid-cols-[1.25fr_0.75fr]">
+        <section className="flex flex-col border-b border-slate-200 lg:min-h-0 lg:border-r lg:border-b-0">
           <div className="border-b border-slate-200 px-6 py-5">
             <p className="text-xs uppercase tracking-[0.2em] text-red-500">
               Personal Alert Button
@@ -254,7 +254,7 @@ export default function Page() {
             <span className="text-slate-700">{status}</span>
           </div>
 
-          <div className="flex-1 space-y-4 overflow-y-auto px-6 py-6">
+          <div className="flex-1 min-h-0 space-y-4 overflow-y-auto px-6 py-6">
             {messages.map((message) => {
               const isUser = message.role === "user";
               const isAgent = message.role === "agent";
@@ -289,7 +289,7 @@ export default function Page() {
           </div>
         </section>
 
-        <aside className="flex flex-col items-center justify-center gap-8 px-6 py-10 bg-white">
+        <aside className="flex flex-col items-center justify-center gap-8 px-6 py-10 bg-white lg:min-h-0">
           <div className="text-center">
             <p className="text-sm uppercase tracking-[0.24em] text-slate-400">
               Emergency Trigger

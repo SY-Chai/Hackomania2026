@@ -645,11 +645,11 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                             {severityConfig[conv.severity].label}
                           </span>
                         )}
-                        {conv.classification && (
+                        {/* {conv.classification && (
                           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded border bg-slate-100 text-slate-600 border-slate-200">
                             {conv.classification}
                           </span>
-                        )}
+                        )} */}
                       </div>
                       {lastMsg && (
                         <p className="text-xs text-slate-400 mt-1 truncate">
@@ -805,11 +805,11 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                     : ""}
                 </span>
               )}
-              {selected.classification && (
+              {/* {selected.classification && (
                 <span className="text-xs font-medium px-2.5 py-1 rounded border bg-slate-100 text-slate-600 border-slate-200">
                   {selected.classification}
                 </span>
-              )}
+              )} */}
             </div>
           </div>
         </div>
