@@ -668,26 +668,46 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
       {/* Right panel */}
       <div className="flex flex-col flex-1 min-w-0 min-h-0">
-        <div className="flex items-start justify-between px-6 py-4 bg-white border-b border-slate-200 gap-4">
-          <div className="flex items-center gap-3">
-            <Avatar className="w-10 h-10">
+        <div className="flex items-center justify-between px-6 py-3 bg-white border-b border-slate-200 gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <Avatar className="w-10 h-10 shrink-0">
               <AvatarFallback className="bg-slate-200 text-slate-700 font-semibold text-sm">
                 {getInitials(getDisplayName(selected))}
               </AvatarFallback>
             </Avatar>
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900">
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-slate-900 truncate">
                 {getDisplayName(selected)}
               </h2>
-              <div className="flex items-center gap-2 mt-0.5">
-                <span className="flex items-center gap-1 text-xs text-slate-500">
-                  <MapPin className="w-3 h-3" />
-                  ID: {selected.id.slice(0, 8)}…
-                </span>
-              </div>
+              <span className="flex items-center gap-1 text-xs text-slate-500 mt-0.5">
+                <MapPin className="w-3 h-3 shrink-0" />
+                ID: {selected.id.slice(0, 8)}…
+              </span>
             </div>
           </div>
-          <div className="flex flex-col items-end gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
+            <span
+              className={cn(
+                "text-xs font-medium px-2 py-0.5 rounded border",
+                phaseConfig[selected.phase].className,
+              )}
+            >
+              {phaseConfig[selected.phase].label}
+            </span>
+            {selected.severity && (
+              <span
+                title={selected.severityReason ?? undefined}
+                className={cn(
+                  "text-xs font-medium px-2 py-0.5 rounded border",
+                  severityConfig[selected.severity].className,
+                )}
+              >
+                {severityConfig[selected.severity].label}
+                {selected.severityConf != null
+                  ? ` ${selected.severityConf}%`
+                  : ""}
+              </span>
+            )}
             <Button
               variant={isListeningSelected ? "destructive" : "outline"}
               size="sm"
@@ -783,52 +803,23 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 </>
               )}
             </Button>
-            <div className="flex items-center gap-2">
-              <span
-                className={cn(
-                  "text-xs font-medium px-2.5 py-1 rounded border",
-                  phaseConfig[selected.phase].className,
-                )}
-              >
-                {phaseConfig[selected.phase].label} phase
-              </span>
-              {selected.severity && (
-                <span
-                  title={selected.severityReason ?? undefined}
-                  className={cn(
-                    "text-xs font-medium px-2.5 py-1 rounded border",
-                    severityConfig[selected.severity].className,
-                  )}
-                >
-                  {severityConfig[selected.severity].label}
-                  {selected.severityConf != null
-                    ? ` ${selected.severityConf}%`
-                    : ""}
-                </span>
-              )}
-              {/* {selected.classification && (
-                <span className="text-xs font-medium px-2.5 py-1 rounded border bg-slate-100 text-slate-600 border-slate-200">
-                  {selected.classification}
-                </span>
-              )} */}
-            </div>
           </div>
         </div>
 
-        <div className="px-6 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center gap-4 flex-wrap">
-          <div className="flex items-center gap-1.5 text-xs text-slate-500">
+        <div className="px-6 py-2 bg-slate-50 border-b border-slate-200 flex items-center gap-3 text-xs text-slate-500 flex-wrap">
+          <span className="flex items-center gap-1.5">
             <Clock className="w-3 h-3" />
-            Started {formatTime(selected.startedAt)}
-          </div>
+            {formatTime(selected.startedAt)}
+          </span>
           <Separator orientation="vertical" className="h-3" />
-          <div className="flex items-center gap-1.5 text-xs text-slate-500">
+          <span className="flex items-center gap-1.5">
             <MessageSquare className="w-3 h-3" />
-            {selected.messages.length} messages
-          </div>
+            {selected.messages.length} msgs
+          </span>
           <Separator orientation="vertical" className="h-3" />
-          <div
+          <span
             className={cn(
-              "flex items-center gap-1.5 text-xs",
+              "flex items-center gap-1.5",
               takeoverConversationId
                 ? "text-red-600"
                 : listenTargetId
@@ -838,27 +829,21 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
           >
             <Volume2 className="w-3 h-3" />
             {liveAudioStatus}
-            {takeoverConversationId && (
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-red-500">
-                Operator call
-              </span>
-            )}
-            {lastSpeaker && (
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                {lastSpeaker === "user" ? "Senior" : "Agent"}
-              </span>
-            )}
-          </div>
-          {liveAudioError && (
-            <span className="text-xs text-red-600">{liveAudioError}</span>
-          )}
-          {takeoverError && (
-            <span className="text-xs text-red-600">{takeoverError}</span>
+            {lastSpeaker && ` (${lastSpeaker === "user" ? "Senior" : "Agent"})`}
+          </span>
+          {(liveAudioError || takeoverError) && (
+            <>
+              <Separator orientation="vertical" className="h-3" />
+              <span className="text-red-600">{liveAudioError || takeoverError}</span>
+            </>
           )}
           {selected.severityReason && (
-            <span className="text-xs text-slate-500">
-              Severity note: {selected.severityReason}
-            </span>
+            <>
+              <Separator orientation="vertical" className="h-3" />
+              <span className="text-slate-400 truncate max-w-xs" title={selected.severityReason}>
+                {selected.severityReason}
+              </span>
+            </>
           )}
         </div>
 
