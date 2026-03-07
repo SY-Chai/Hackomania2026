@@ -19,14 +19,15 @@ export function createRouter(io) {
     if (!supabase)
       return res.status(500).json({ error: "Supabase not configured" });
 
-    const { start, end, triage, classification } = req.body || {};
+    // const { start, end, triage, classification } = req.body || {};
+    const { start, end, triage } = req.body || {};
     const { data, error } = await supabase
       .from("conversations")
       .insert([{
         start: start || getUTC8Time(),
         end: end || getUTC8Time(),
         triage: triage || "agent",
-        classification: classification || "uncertain",
+        // classification: classification || "uncertain",
       }])
       .select();
 
@@ -41,10 +42,11 @@ export function createRouter(io) {
       return res.status(500).json({ error: "Supabase not configured" });
 
     const { id } = req.params;
-    const { triage, classification } = req.body;
+    // const { triage, classification } = req.body;
+    const { triage } = req.body;
     const updates = {};
     if (triage) updates.triage = triage;
-    if (classification) updates.classification = classification;
+    // if (classification) updates.classification = classification;
 
     if (Object.keys(updates).length === 0)
       return res.status(400).json({ error: "No valid fields to update" });
