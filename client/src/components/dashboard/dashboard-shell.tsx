@@ -25,16 +25,20 @@ const STATS = (stationary: number, ongoing: number) => [
 ];
 
 const DEFAULT_WIDTH = 700;
-const MIN_WIDTH = 280;
-const COLLAPSE_THRESHOLD = 120;
+// Must fit: conversation list column (w-80 = 320px) + detail controls comfortably.
+const MIN_WIDTH = 700;
+const MAX_WIDTH = 1200;
+const MIN_RIGHT_PANEL_WIDTH = 360; // keeps Listen live + Take over visible side-by-side
+const SEPARATOR_WIDTH = 8;
 
 export function DashboardShell({
   conversations,
   ongoing,
 }: Props) {
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
-  const [collapsed, setCollapsed] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
   const [mapStats, setMapStats] = useState<{ stationary: number; ongoing: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Refs to track drag state without causing re-renders
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -46,12 +50,13 @@ export function DashboardShell({
       e.preventDefault();
       wasDragged.current = false;
       isDragging.current = true;
+      setIsResizing(true);
       dragRef.current = {
         startX: e.clientX,
-        startWidth: collapsed ? 0 : panelWidth,
+        startWidth: panelWidth,
       };
     },
-    [collapsed, panelWidth],
+    [panelWidth],
   );
 
   useEffect(() => {
@@ -60,17 +65,18 @@ export function DashboardShell({
       const delta = e.clientX - dragRef.current.startX;
       if (Math.abs(delta) > 4) wasDragged.current = true;
       const newWidth = dragRef.current.startWidth + delta;
-      if (newWidth < COLLAPSE_THRESHOLD) {
-        setCollapsed(true);
-      } else {
-        setCollapsed(false);
-        setPanelWidth(Math.max(MIN_WIDTH, Math.min(newWidth, 1000)));
-      }
+      const containerWidth = containerRef.current?.clientWidth ?? 0;
+      const computedMaxWidth = containerWidth
+        ? Math.max(MIN_WIDTH, containerWidth - MIN_RIGHT_PANEL_WIDTH - SEPARATOR_WIDTH)
+        : MAX_WIDTH;
+      const effectiveMaxWidth = Math.min(MAX_WIDTH, computedMaxWidth);
+      setPanelWidth(Math.max(MIN_WIDTH, Math.min(newWidth, effectiveMaxWidth)));
     };
 
     const onMouseUp = () => {
       dragRef.current = null;
       isDragging.current = false;
+      setIsResizing(false);
     };
 
     window.addEventListener("mousemove", onMouseMove);
@@ -83,7 +89,6 @@ export function DashboardShell({
 
   const onSeparatorClick = useCallback(() => {
     if (wasDragged.current) return;
-    setCollapsed((prev) => !prev);
   }, []);
 
   const onStatsLoaded = useCallback(
@@ -95,25 +100,20 @@ export function DashboardShell({
   const displayOngoing = mapStats?.ongoing ?? ongoing;
 
   return (
-    <div className="flex h-full overflow-hidden select-none">
+    <div ref={containerRef} className="flex h-full overflow-hidden select-none">
       {/* Left: Conversations panel */}
       <div
-        style={{ width: collapsed ? 0 : panelWidth }}
+        style={{ width: panelWidth }}
         className="flex flex-col shrink-0 overflow-hidden"
       >
-        <ConversationsView
-          conversations={conversations}
-          onCollapse={() => setCollapsed(true)}
-        />
+        <ConversationsView conversations={conversations} />
       </div>
 
       {/* Draggable separator */}
       <div
         onMouseDown={onSeparatorMouseDown}
         onClick={onSeparatorClick}
-        title={
-          collapsed ? "Click to expand" : "Drag to resize · Click to collapse"
-        }
+        title="Drag to resize"
         className={cn(
           "relative w-2 shrink-0 cursor-col-resize flex items-center justify-center group z-10",
           "bg-slate-200 hover:bg-slate-300 active:bg-slate-400 transition-colors duration-100",
@@ -129,8 +129,8 @@ export function DashboardShell({
 
       {/* Right: Map */}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex-1 min-h-0 relative rounded border border-slate-200 overflow-hidden">
-          <SingaporeMap onStatsLoaded={onStatsLoaded} />
+        <div className="flex-1 min-h-0 min-w-0 relative rounded border border-slate-200 overflow-hidden">
+          <SingaporeMap onStatsLoaded={onStatsLoaded} isResizing={isResizing} />
           {/* Compact stats overlay — top left */}
           <div className="absolute top-3 left-3 z-10 bg-white/95 border border-slate-200 rounded p-2 flex flex-col gap-1 text-xs shadow-sm">
             {STATS(stationary, displayOngoing).map(({ label, value, Icon }) => (

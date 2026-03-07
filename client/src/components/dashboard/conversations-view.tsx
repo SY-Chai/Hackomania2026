@@ -97,6 +97,13 @@ function formatTime(iso: string | null | undefined) {
   });
 }
 
+function formatSeverityConf(conf: number | null | undefined) {
+  if (conf == null || !Number.isFinite(conf)) return null;
+  const normalized = conf <= 1 ? conf * 100 : conf;
+  const bounded = Math.max(0, Math.min(100, normalized));
+  return `${bounded.toFixed(0)}%`;
+}
+
 function getInitials(name: string) {
   return name
     .split(" ")
@@ -708,7 +715,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
       {/* Right panel */}
       <div className="flex flex-col flex-1 min-w-0 min-h-0">
-        <div className="flex items-center justify-between px-6 py-3 bg-white border-b border-slate-200 gap-4">
+        <div className="flex flex-wrap items-start justify-between px-6 py-3 bg-white border-b border-slate-200 gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <Avatar className="w-10 h-10 shrink-0">
               <AvatarFallback className="bg-slate-200 text-slate-700 font-semibold text-sm">
@@ -729,32 +736,36 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <span
-              className={cn(
-                "text-xs font-medium px-2 py-0.5 rounded border",
-                phaseConfig[selected.phase].className,
-              )}
-            >
-              {phaseConfig[selected.phase].label}
-            </span>
-            {selected.severity && (
+          <div className="flex w-full flex-wrap items-center justify-center gap-2 min-w-0">
+            <div className="flex flex-wrap items-center justify-center gap-2">
               <span
-                title={selected.severityReason ?? undefined}
                 className={cn(
                   "text-xs font-medium px-2 py-0.5 rounded border",
-                  severityConfig[selected.severity].className,
+                  phaseConfig[selected.phase].className,
                 )}
               >
-                {severityConfig[selected.severity].label}
-                {selected.severityConf != null
-                  ? ` ${selected.severityConf}%`
-                  : ""}
+                {phaseConfig[selected.phase].label}
               </span>
-            )}
-            <Button
-              variant={isListeningSelected ? "destructive" : "outline"}
-              size="sm"
+              {selected.severity && (
+                <span
+                  title={selected.severityReason ?? undefined}
+                  className={cn(
+                    "text-xs font-medium px-2 py-0.5 rounded border",
+                    severityConfig[selected.severity].className,
+                  )}
+                >
+                  {severityConfig[selected.severity].label}
+                  {formatSeverityConf(selected.severityConf)
+                    ? ` ${formatSeverityConf(selected.severityConf)}`
+                    : ""}
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button
+                className="min-w-[140px] justify-center"
+                variant={isListeningSelected ? "destructive" : "outline"}
+                size="sm"
               onClick={() => {
                 if (isListeningSelected) {
                   listenerSocketRef.current?.emit("operator_takeover_stop", selected.id);
@@ -793,10 +804,11 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                   Listen live
                 </>
               )}
-            </Button>
-            <Button
-              variant={isTakeoverSelected ? "destructive" : "default"}
-              size="sm"
+              </Button>
+              <Button
+                className="min-w-[140px] justify-center"
+                variant={isTakeoverSelected ? "destructive" : "default"}
+                size="sm"
               onClick={() => {
                 if (isTakeoverSelected || isTakeoverPending) {
                   listenerSocketRef.current?.emit("operator_takeover_stop", selected.id);
@@ -846,7 +858,8 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                   Take over
                 </>
               )}
-            </Button>
+              </Button>
+            </div>
           </div>
         </div>
 
