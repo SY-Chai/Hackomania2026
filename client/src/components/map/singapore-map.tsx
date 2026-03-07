@@ -35,6 +35,7 @@ export interface PABMarker {
 interface Props {
   pabs?: PABMarker[];
   onStatsLoaded?: (stats: { stationary: number; ongoing: number }) => void;
+  isResizing?: boolean;
 }
 
 // --- Mapbox layer styles (stable references) ---
@@ -109,12 +110,16 @@ function toFeature(p: PABMarker): GeoJSON.Feature {
   };
 }
 
-export function SingaporeMap({ pabs: propPabs, onStatsLoaded }: Props) {
+export function SingaporeMap({ pabs: propPabs, onStatsLoaded, isResizing = false }: Props) {
   const mapRef = useRef<MapRef>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const lastResizeAtRef = useRef(0);
+  const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [fetchedPabs, setFetchedPabs] = useState<PABMarker[] | null>(null);
   const [popupInfo, setPopupInfo] = useState<PABMarker | null>(null);
   const [cursor, setCursor] = useState("auto");
   const [filterOngoingOnly, setFilterOngoingOnly] = useState(false);
+  const [isMapReady, setIsMapReady] = useState(false);
 
   useEffect(() => {
     if (propPabs) return;
@@ -185,8 +190,44 @@ export function SingaporeMap({ pabs: propPabs, onStatsLoaded }: Props) {
     [pabs],
   );
 
+  useEffect(() => {
+    if (!isMapReady || !containerRef.current) return;
+
+    const resizeMap = () => {
+      lastResizeAtRef.current = Date.now();
+      mapRef.current?.resize();
+    };
+
+    const observer = new ResizeObserver(() => {
+      if (isResizing) return;
+      const now = Date.now();
+      if (now - lastResizeAtRef.current > 80) {
+        resizeMap();
+        return;
+      }
+      if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+      resizeTimeoutRef.current = setTimeout(resizeMap, 90);
+    });
+    observer.observe(containerRef.current);
+
+    const rafId = requestAnimationFrame(resizeMap);
+    return () => {
+      cancelAnimationFrame(rafId);
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current);
+        resizeTimeoutRef.current = null;
+      }
+      observer.disconnect();
+    };
+  }, [isMapReady, isResizing]);
+
+  useEffect(() => {
+    if (!isMapReady || isResizing) return;
+    mapRef.current?.resize();
+  }, [isMapReady, isResizing]);
+
   return (
-    <div className="relative w-full h-full overflow-hidden">
+    <div ref={containerRef} className="relative w-full h-full min-w-0 overflow-hidden">
       <Map
         ref={mapRef}
         initialViewState={INITIAL_VIEW}
@@ -195,11 +236,13 @@ export function SingaporeMap({ pabs: propPabs, onStatsLoaded }: Props) {
         mapStyle="mapbox://styles/mapbox/light-v11"
         mapboxAccessToken={MAPBOX_TOKEN}
         attributionControl={false}
+        fadeDuration={0}
         interactiveLayerIds={INTERACTIVE_LAYERS}
         onClick={onClick}
         cursor={cursor}
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
+        onLoad={() => setIsMapReady(true)}
       >
         <Source
           id="pabs"
