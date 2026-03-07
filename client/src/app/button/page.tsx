@@ -241,6 +241,12 @@ function ButtonPageContent() {
       stopConversation();
     });
 
+    socket.on("force_end_emergency_session", () => {
+      setError("Conversation ended by operator.");
+      setStatus("Ended by operator");
+      stopConversation();
+    });
+
     socket.on("disconnect", () => {
       console.log("🛑 WS DEBUG: Socket disconnected");
       stopConversation();

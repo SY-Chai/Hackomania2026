@@ -195,6 +195,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const [pendingTakeoverConversationId, setPendingTakeoverConversationId] =
     useState<string | null>(null);
   const [takeoverError, setTakeoverError] = useState<string | null>(null);
+  const [isEndingConversation, setIsEndingConversation] = useState(false);
   const [isSummaryOpen, setIsSummaryOpen] = useState(true);
 
   const listenerSocketRef = useRef<Socket | null>(null);
@@ -504,6 +505,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
       pendingTakeoverConversationIdRef.current = null;
       setPendingTakeoverConversationId(null);
       setTakeoverConversationId(null);
+      setIsEndingConversation(false);
       setLiveAudioStatus("Listening live");
     });
 
@@ -513,6 +515,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
       pendingTakeoverConversationIdRef.current = null;
       setPendingTakeoverConversationId(null);
       setTakeoverConversationId(null);
+      setIsEndingConversation(false);
       setTakeoverError(message || "Failed to start operator takeover.");
       setLiveAudioStatus("Listening live");
     });
@@ -526,6 +529,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
       pendingTakeoverConversationIdRef.current = null;
       setPendingTakeoverConversationId(null);
       setTakeoverConversationId(null);
+      setIsEndingConversation(false);
       setListenTargetId(null);
     });
 
@@ -537,6 +541,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
       pendingTakeoverConversationIdRef.current = null;
       setPendingTakeoverConversationId(null);
       setTakeoverConversationId(null);
+      setIsEndingConversation(false);
       setListenTargetId(null);
     });
 
@@ -562,6 +567,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
       setPendingTakeoverConversationId(null);
       setTakeoverConversationId(null);
       setTakeoverError(null);
+      setIsEndingConversation(false);
     };
   }, [
     listenTargetId,
@@ -910,6 +916,45 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                   <>
                     <Mic className="w-3.5 h-3.5" />
                     Take over
+                  </>
+                )}
+              </Button>
+              <Button
+                className="min-w-[160px] justify-center"
+                variant="destructive"
+                size="sm"
+                onClick={() => {
+                  const socket = listenerSocketRef.current;
+                  if (!isListeningSelected || !socket?.connected) {
+                    setTakeoverError("Start listen live before ending the conversation.");
+                    return;
+                  }
+
+                  setIsEndingConversation(true);
+                  setTakeoverError(null);
+                  setLiveAudioStatus("Ending conversation...");
+                  socket.emit("operator_end_conversation", selected.id);
+                  socket.emit("operator_takeover_stop", selected.id);
+                  stopOperatorMicrophoneCapture();
+                  pendingTakeoverConversationIdRef.current = null;
+                  setPendingTakeoverConversationId(null);
+                  setTakeoverConversationId(null);
+                  setTimeout(() => {
+                    setListenTargetId(null);
+                    setIsEndingConversation(false);
+                  }, 200);
+                }}
+                disabled={!isListeningSelected || isEndingConversation}
+              >
+                {isEndingConversation ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Ending...
+                  </>
+                ) : (
+                  <>
+                    <PhoneOff className="w-3.5 h-3.5" />
+                    End conversation
                   </>
                 )}
               </Button>
