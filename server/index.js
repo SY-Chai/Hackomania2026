@@ -4,6 +4,7 @@ const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const http = require('http');
 const { Server } = require('socket.io');
+const WebSocket = require('ws');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid'); // Optional, to generate unique filenames
@@ -177,6 +178,153 @@ app.post('/api/upload-audio', upload.single('audio'), async (req, res) => {
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
+  let openAiWs = null;
+
+  // Start an emergency voice session
+  socket.on('start_emergency_session', () => {
+    if (openAiWs) {
+      console.log(`[Socket ${socket.id}] WebSocket already exists.`);
+      return;
+    }
+
+    if (!process.env.OPENAI_API_KEY) {
+      socket.emit('session_error', 'OPENAI_API_KEY is missing on the server.');
+      return;
+    }
+
+    console.log(`[Socket ${socket.id}] Starting emergency session with OpenAI`);
+    
+    // Connect to OpenAI Realtime API
+    const url = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview';
+    openAiWs = new WebSocket(url, {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        'OpenAI-Beta': 'realtime=v1',
+      },
+    });
+
+    openAiWs.on('open', () => {
+      console.log(`[Socket ${socket.id}] Connected to OpenAI Realtime API`);
+
+      // 1. Send the initial session.update event
+      const sessionUpdate = {
+        type: 'session.update',
+        session: {
+          modalities: ['audio', 'text'],
+          instructions: `
+You are a calm emergency voice assistant helping seniors who pressed a Personal Alert Button.
+
+Your goals:
+- Speak clearly, slowly, and briefly.
+- Ask what happened.
+- Determine if the situation is urgent, uncertain, or non-urgent.
+- Ask one question at a time.
+- If the senior may be in danger, prioritise questions about breathing, bleeding, consciousness, pain, mobility, and whether they are alone.
+- If the senior speaks unclearly, reassure them and ask simple follow-up questions.
+- Keep your replies concise and suitable for speech.
+          `.trim(),
+          voice: 'alloy', // Optional: specify voice
+          input_audio_format: 'pcm16',
+          output_audio_format: 'pcm16',
+          input_audio_transcription: {
+            model: 'whisper-1',
+          },
+          turn_detection: {
+            type: 'server_vad',
+            threshold: 0.65,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 1000,
+          },
+        },
+      };
+
+      openAiWs.send(JSON.stringify(sessionUpdate));
+      socket.emit('session_started');
+    });
+
+    // 2. Receive responses from OpenAI
+    openAiWs.on('message', (message) => {
+      try {
+        const event = JSON.parse(message.toString());
+
+        switch (event.type) {
+          case 'response.audio.delta':
+            // Base64 decode to PCM16 ArrayBuffer
+            if (event.delta) {
+              const buffer = Buffer.from(event.delta, 'base64');
+              socket.emit('server_audio', buffer);
+            }
+            break;
+
+          case 'response.audio_transcript.done':
+            socket.emit('history_updated', [{
+              id: event.item_id || Date.now().toString(),
+              role: 'assistant',
+              text: event.transcript
+            }]);
+            break;
+
+          case 'conversation.item.input_audio_transcription.completed':
+            socket.emit('history_updated', [{
+              id: event.item_id || Date.now().toString(),
+              role: 'user',
+              text: event.transcript
+            }]);
+            break;
+
+          case 'error':
+            console.error(`[Socket ${socket.id}] OpenAI error:`, event.error);
+            socket.emit('session_error', event.error?.message || 'Unknown OpenAI error');
+            break;
+            
+          case 'input_audio_buffer.speech_started':
+            socket.emit('status_update', 'Listening...');
+            break;
+
+          case 'input_audio_buffer.speech_stopped':
+            socket.emit('status_update', 'Processing...');
+            break;
+        }
+      } catch (err) {
+        console.error('Error handling OpenAI message:', err);
+      }
+    });
+
+    openAiWs.on('close', () => {
+      console.log(`[Socket ${socket.id}] OpenAI WebSocket closed`);
+      socket.emit('session_stopped');
+      openAiWs = null;
+    });
+
+    openAiWs.on('error', (err) => {
+      console.error(`[Socket ${socket.id}] OpenAI WebSocket error:`, err);
+      socket.emit('session_error', 'WebSocket error connecting to OpenAI');
+    });
+  });
+
+  // 3. Receive audio chunks from the frontend client
+  socket.on('client_audio', (pcm16Buffer) => {
+    if (openAiWs && openAiWs.readyState === WebSocket.OPEN) {
+      // Encode ArrayBuffer to base64
+      const base64Audio = Buffer.from(pcm16Buffer).toString('base64');
+      
+      const audioEvent = {
+        type: 'input_audio_buffer.append',
+        audio: base64Audio,
+      };
+
+      openAiWs.send(JSON.stringify(audioEvent));
+    }
+  });
+
+  socket.on('stop_emergency_session', () => {
+    console.log(`[Socket ${socket.id}] stop_emergency_session`);
+    if (openAiWs) {
+      openAiWs.close();
+      openAiWs = null;
+    }
+  });
+
   // A user/operator joins a specific conversation room
   socket.on('join_conversation', (conversationId) => {
     socket.join(conversationId);
@@ -191,6 +339,10 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
+    if (openAiWs) {
+      openAiWs.close();
+      openAiWs = null;
+    }
   });
 });
 

@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { RealtimeAgent, RealtimeSession } from "@openai/agents/realtime";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, Loader2, Mic, PhoneOff } from "lucide-react";
+import { io, Socket } from "socket.io-client";
 
 import { Button } from "@/components/ui/button";
 
@@ -11,61 +11,6 @@ type ChatMessage = {
   role: "user" | "assistant" | "system";
   text: string;
 };
-
-function extractTextFromContent(content: any): string {
-  if (!content) return "";
-
-  if (typeof content === "string") return content;
-
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if (part?.text) return part.text;
-        if (part?.transcript) return part.transcript;
-        if (part?.content) return extractTextFromContent(part.content);
-        return "";
-      })
-      .filter(Boolean)
-      .join(" ");
-  }
-
-  if (typeof content === "object") {
-    if (content.text) return content.text;
-    if (content.transcript) return content.transcript;
-    if (content.content) return extractTextFromContent(content.content);
-  }
-
-  return "";
-}
-
-function mapHistoryToMessages(history: any[]): ChatMessage[] {
-  return history
-    .map((item: any, index: number) => {
-      const role =
-        item?.role === "assistant" || item?.role === "user" || item?.role === "system"
-          ? item.role
-          : item?.type === "message"
-          ? item?.role ?? "system"
-          : "system";
-
-      const text =
-        extractTextFromContent(item?.content) ||
-        extractTextFromContent(item?.formatted?.text) ||
-        extractTextFromContent(item?.text) ||
-        extractTextFromContent(item?.transcript) ||
-        "";
-
-      if (!text.trim()) return null;
-
-      return {
-        id: item?.id ?? `${role}-${index}`,
-        role,
-        text: text.trim(),
-      };
-    })
-    .filter(Boolean) as ChatMessage[];
-}
 
 function float32ToInt16(float32: Float32Array): Int16Array {
   const int16 = new Int16Array(float32.length);
@@ -119,7 +64,7 @@ export default function Page() {
   const [status, setStatus] = useState("Idle");
   const [error, setError] = useState<string | null>(null);
 
-  const sessionRef = useRef<RealtimeSession | null>(null);
+  const socketRef = useRef<Socket | null>(null);
 
   const inputAudioContextRef = useRef<AudioContext | null>(null);
   const playbackAudioContextRef = useRef<AudioContext | null>(null);
@@ -127,26 +72,6 @@ export default function Page() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const nextPlaybackTimeRef = useRef(0);
-
-  const agent = useMemo(
-    () =>
-      new RealtimeAgent({
-        name: "PAB Emergency Assistant",
-        instructions: `
-You are a calm emergency voice assistant helping seniors who pressed a Personal Alert Button.
-
-Your goals:
-- Speak clearly, slowly, and briefly.
-- Ask what happened.
-- Determine if the situation is urgent, uncertain, or non-urgent.
-- Ask one question at a time.
-- If the senior may be in danger, prioritise questions about breathing, bleeding, consciousness, pain, mobility, and whether they are alone.
-- If the senior speaks unclearly, reassure them and ask simple follow-up questions.
-- Keep your replies concise and suitable for speech.
-        `.trim(),
-      }),
-    []
-  );
 
   const stopPlaybackLoop = useCallback(() => {
     nextPlaybackTimeRef.current = 0;
@@ -190,7 +115,7 @@ Your goals:
       sourceRef.current?.disconnect();
       processorRef.current = null;
       sourceRef.current = null;
-    } catch {}
+    } catch { }
 
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -198,7 +123,7 @@ Your goals:
     }
 
     if (inputAudioContextRef.current) {
-      inputAudioContextRef.current.close().catch(() => {});
+      inputAudioContextRef.current.close().catch(() => { });
       inputAudioContextRef.current = null;
     }
   }, []);
@@ -210,61 +135,66 @@ Your goals:
     stopPlaybackLoop();
 
     if (playbackAudioContextRef.current) {
-      playbackAudioContextRef.current.close().catch(() => {});
+      playbackAudioContextRef.current.close().catch(() => { });
       playbackAudioContextRef.current = null;
     }
 
-    try {
-      sessionRef.current?.close();
-      console.log("🔎 WS DEBUG: session closed");
-    } catch (err) {
-      console.warn("🔎 WS DEBUG: error closing session", err);
+    if (socketRef.current) {
+      socketRef.current.emit("stop_emergency_session");
+      socketRef.current.disconnect();
+      socketRef.current = null;
+      console.log("🔎 WS DEBUG: socket disconnected");
     }
 
-    sessionRef.current = null;
     setIsConnected(false);
     setIsConnecting(false);
     setStatus("Disconnected");
   }, [stopMicrophoneCapture, stopPlaybackLoop]);
 
-  const startMicrophoneCapture = useCallback(async (session: RealtimeSession) => {
+  const startMicrophoneCapture = useCallback(async (socket: Socket) => {
     console.log("🎤 WS DEBUG: requesting microphone");
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        noiseSuppression: true,
-        echoCancellation: true,
-        autoGainControl: true,
-        channelCount: 1,
-      },
-    });
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          noiseSuppression: true,
+          echoCancellation: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+      });
 
-    mediaStreamRef.current = stream;
+      mediaStreamRef.current = stream;
 
-    const audioContext = new AudioContext();
-    inputAudioContextRef.current = audioContext;
+      const audioContext = new AudioContext();
+      inputAudioContextRef.current = audioContext;
 
-    const source = audioContext.createMediaStreamSource(stream);
-    sourceRef.current = source;
+      const source = audioContext.createMediaStreamSource(stream);
+      sourceRef.current = source;
 
-    const processor = audioContext.createScriptProcessor(4096, 1, 1);
-    processorRef.current = processor;
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor;
 
-    source.connect(processor);
-    processor.connect(audioContext.destination);
+      source.connect(processor);
+      processor.connect(audioContext.destination);
 
-    processor.onaudioprocess = (event) => {
-      const input = event.inputBuffer.getChannelData(0);
-      const copied = new Float32Array(input);
-      const pcm16 = resampleTo24k(copied, audioContext.sampleRate);
+      processor.onaudioprocess = (event) => {
+        const input = event.inputBuffer.getChannelData(0);
+        const copied = new Float32Array(input);
+        const pcm16 = resampleTo24k(copied, audioContext.sampleRate);
 
-      session.sendAudio(pcm16.buffer, { commit: false });
-    };
+        socket.emit("client_audio", pcm16.buffer);
+      };
 
-    console.log("🎤 WS DEBUG: microphone streaming started at", audioContext.sampleRate);
-  }, []);
+      console.log("🎤 WS DEBUG: microphone streaming started at", audioContext.sampleRate);
+    } catch (err) {
+      console.error("Microphone access denied:", err);
+      setError("Microphone access is required to use the emergency voice assistant.");
+      stopConversation();
+    }
+  }, [stopConversation]);
 
-  const startConversation = useCallback(async () => {
+  const startConversation = useCallback(() => {
     console.log("🔎 WS DEBUG: startConversation triggered");
 
     if (isConnecting || isConnected) {
@@ -276,150 +206,74 @@ Your goals:
     setIsConnecting(true);
     setStatus("Requesting secure session...");
 
-    try {
-      const tokenRes = await fetch("/api/realtime/session", {
-        method: "POST",
-      });
+    if (!playbackAudioContextRef.current) {
+      playbackAudioContextRef.current = new AudioContext({ sampleRate: 24000 });
+    }
+    nextPlaybackTimeRef.current = playbackAudioContextRef.current.currentTime;
 
-      console.log("🔎 WS DEBUG: token response status:", tokenRes.status);
+    // Connect to Node.js backend
+    const socket = io("http://localhost:3001");
+    socketRef.current = socket;
 
-      if (!tokenRes.ok) {
-        throw new Error("Failed to create realtime session token.");
-      }
+    socket.on("connect", () => {
+      console.log("✅ WS DEBUG: Connected to backend Socket.IO");
+      socket.emit("start_emergency_session");
+    });
 
-      const tokenJson = await tokenRes.json();
-      console.log("🔎 WS DEBUG: token JSON:", tokenJson);
-
-      const clientSecret =
-        tokenJson.client_secret ?? tokenJson.value ?? tokenJson.clientSecret;
-
-      if (!clientSecret) {
-        throw new Error("No client secret returned from /api/realtime/session.");
-      }
-
-      if (!playbackAudioContextRef.current) {
-        playbackAudioContextRef.current = new AudioContext({ sampleRate: 24000 });
-      }
-
-      nextPlaybackTimeRef.current = playbackAudioContextRef.current.currentTime;
-
-      const session = new RealtimeSession(agent, {
-        transport: "websocket",
-        model: "gpt-realtime",
-        config: {
-          outputModalities: ["audio"],
-          audio: {
-            input: {
-              format: "pcm16",
-              noiseReduction: {
-                type: "far_field",
-              },
-              transcription: {
-                model: "gpt-4o-mini-transcribe",
-              },
-              turnDetection: {
-                type: "server_vad",
-                threshold: 0.65,
-                silenceDurationMs: 1000,
-                prefixPaddingMs: 300,
-                interruptResponse: true,
-                createResponse: true,
-              },
-            },
-            output: {
-              format: "pcm16",
-            },
-          },
-        },
-      });
-
-      sessionRef.current = session;
-
-      session.on("history_updated", (history: any[]) => {
-        console.log("📝 WS DEBUG: history updated", history);
-        const nextMessages = mapHistoryToMessages(history);
-        setMessages((prev) => {
-          const intro = prev.find((m) => m.id === "intro");
-          return nextMessages.length > 0 ? nextMessages : intro ? [intro] : prev;
-        });
-      });
-
-      session.on("audio", (event: any) => {
-        console.log("🔊 WS DEBUG: received audio chunk", event);
-        const data = event?.data;
-
-        if (!data) return;
-
-        let pcmChunk: Int16Array | null = null;
-
-        if (data instanceof ArrayBuffer) {
-          pcmChunk = new Int16Array(data);
-        } else if (ArrayBuffer.isView(data)) {
-          const view = data as ArrayBufferView;
-          pcmChunk = new Int16Array(
-            view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength)
-          );
-        }
-
-        if (pcmChunk) {
-          schedulePcm16Playback(pcmChunk);
-        }
-      });
-
-      session.on("audio_start", () => {
-        console.log("🎤 WS DEBUG: audio_start");
-        setStatus("Listening...");
-      });
-
-      session.on("audio_stopped", () => {
-        console.log("🛑 WS DEBUG: audio_stopped");
-        setStatus("Processing...");
-      });
-
-      session.on("audio_interrupted", () => {
-        console.log("⚠️ WS DEBUG: audio_interrupted");
-        setStatus("Interrupted");
-      });
-
-      session.on("error", (err: any) => {
-        console.error("❌ WS DEBUG: realtime session error (full)", err);
-        console.error("❌ WS DEBUG: realtime session error.error", err?.error);
-        console.error("❌ WS DEBUG: realtime session error.message", err?.message);
-        console.error("❌ WS DEBUG: realtime session error JSON", JSON.stringify(err, null, 2));
-
-        setError(
-          err?.error?.message ??
-            err?.message ??
-            "Something went wrong in the voice session."
-        );
-        setStatus("Error");
-      });
-
-      console.log("🔌 WS DEBUG: connecting websocket session...");
-      await session.connect({
-        apiKey: clientSecret,
-      });
-
-      console.log("✅ WS DEBUG: websocket session connected");
-
-      await startMicrophoneCapture(session);
-
-      setIsConnected(true);
+    socket.on("session_started", () => {
+      console.log("✅ WS DEBUG: OpenAI emergency session started");
       setStatus("Connected — speak now");
+      setIsConnected(true);
+      setIsConnecting(false);
+      startMicrophoneCapture(socket);
+    });
 
-      // session.sendMessage(
-      //   "The senior has pressed the Personal Alert Button. Please greet them and ask what happened."
-      // );
-    } catch (err: any) {
-      console.error("❌ WS DEBUG: startConversation failed", err);
-      setError(err?.message ?? "Failed to start the voice conversation.");
+    socket.on("server_audio", (buffer: ArrayBuffer) => {
+      // The backend sends a Node.js Buffer, which arrives as an ArrayBuffer in the browser
+      const pcmChunk = new Int16Array(buffer);
+      schedulePcm16Playback(pcmChunk);
+    });
+
+    socket.on("history_updated", (newMessages: ChatMessage[]) => {
+      setMessages((prev) => {
+        const next = [...prev];
+        for (const msg of newMessages) {
+          if (!msg.text) continue;
+          next.push(msg);
+        }
+        return next;
+      });
+    });
+
+    socket.on("status_update", (newStatus: string) => {
+      setStatus(newStatus);
+    });
+
+    socket.on("session_error", (errMsg: string) => {
+      console.error("❌ WS DEBUG: backend session error", errMsg);
+      setError(errMsg);
+      setStatus("Error");
+      stopConversation();
+    });
+
+    socket.on("session_stopped", () => {
+      console.log("🛑 WS DEBUG: emergency session stopped by server");
+      stopConversation();
+    });
+
+    socket.on("disconnect", () => {
+      console.log("🛑 WS DEBUG: Socket disconnected");
+      stopConversation();
+    });
+
+    socket.on("connect_error", (err) => {
+      console.error("❌ WS DEBUG: Socket connection error", err);
+      setError("Failed to connect to the backend server.");
       setStatus("Failed to connect");
       stopConversation();
-    } finally {
-      setIsConnecting(false);
-    }
+    });
+
   }, [
-    agent,
     isConnected,
     isConnecting,
     schedulePcm16Playback,
@@ -454,13 +308,12 @@ Your goals:
 
           <div className="flex items-center gap-3 border-b border-gray-200 px-6 py-4 text-sm">
             <div
-              className={`h-2.5 w-2.5 rounded-full ${
-                isConnected
+              className={`h-2.5 w-2.5 rounded-full ${isConnected
                   ? "bg-green-500"
                   : isConnecting
-                  ? "bg-yellow-500"
-                  : "bg-gray-300"
-              }`}
+                    ? "bg-yellow-500"
+                    : "bg-gray-300"
+                }`}
             />
             <span className="text-gray-700">{status}</span>
           </div>
@@ -473,18 +326,16 @@ Your goals:
               return (
                 <div
                   key={message.id}
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm ${
-                    isUser
+                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm ${isUser
                       ? "ml-auto bg-red-600 text-white"
                       : isAssistant
-                      ? "bg-gray-100 text-gray-900"
-                      : "bg-gray-200 text-gray-700"
-                  }`}
+                        ? "bg-gray-100 text-gray-900"
+                        : "bg-gray-200 text-gray-700"
+                    }`}
                 >
                   <div
-                    className={`mb-1 text-xs font-medium uppercase tracking-wide ${
-                      isUser ? "text-red-100" : "text-gray-500"
-                    }`}
+                    className={`mb-1 text-xs font-medium uppercase tracking-wide ${isUser ? "text-red-100" : "text-gray-500"
+                      }`}
                   >
                     {isUser ? "Senior" : isAssistant ? "AI Responder" : "System"}
                   </div>
@@ -538,10 +389,9 @@ Your goals:
           </Button>
 
           <div className="max-w-sm rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700 shadow-sm">
-            <div className="mb-2 font-medium text-gray-900">Demo notes</div>
+            <div className="mb-2 font-medium text-gray-900">System Architecture</div>
             <p>
-              This version uses WebSocket transport, so microphone capture and
-              speaker playback are handled manually in the browser.
+              This version securely proxies bidirectional audio via WebSockets on the Node.js backend. The frontend captures audio, streams to the backend, and the backend communicates with OpenAI.
             </p>
           </div>
         </aside>
