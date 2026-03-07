@@ -328,7 +328,7 @@ export default function Page() {
                   key={message.id}
                   className={`max-w-[85%] rounded px-4 py-3 text-sm leading-6 ${isUser
                       ? "ml-auto bg-slate-900 text-white"
-                      : isAssistant
+                      : isUser
                         ? "bg-slate-100 text-slate-900 border border-slate-200"
                         : "bg-white text-slate-600 border border-slate-200"
                     }`}
