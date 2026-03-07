@@ -106,19 +106,6 @@ function resampleTo24k(input: Float32Array, inputSampleRate: number): Int16Array
   return float32ToInt16(result);
 }
 
-function concatInt16Arrays(chunks: Int16Array[]): Int16Array {
-  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const merged = new Int16Array(totalLength);
-  let offset = 0;
-
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  return merged;
-}
-
 export default function Page() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -139,9 +126,7 @@ export default function Page() {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-
-  const playbackQueueRef = useRef<Int16Array[]>([]);
-  const playbackTimerRef = useRef<number | null>(null);
+  const nextPlaybackTimeRef = useRef(0);
 
   const agent = useMemo(
     () =>
@@ -164,36 +149,39 @@ Your goals:
   );
 
   const stopPlaybackLoop = useCallback(() => {
-    if (playbackTimerRef.current) {
-      window.clearInterval(playbackTimerRef.current);
-      playbackTimerRef.current = null;
-    }
-    playbackQueueRef.current = [];
+    nextPlaybackTimeRef.current = 0;
   }, []);
 
-  const startPlaybackLoop = useCallback(() => {
-    if (playbackTimerRef.current) return;
+  const schedulePcm16Playback = useCallback((pcmChunk: Int16Array) => {
+    const ctx = playbackAudioContextRef.current;
+    if (!ctx || pcmChunk.length === 0) return;
 
-    playbackTimerRef.current = window.setInterval(() => {
-      const ctx = playbackAudioContextRef.current;
-      if (!ctx) return;
-      if (playbackQueueRef.current.length === 0) return;
+    const audioBuffer = ctx.createBuffer(1, pcmChunk.length, 24000);
+    const channel = audioBuffer.getChannelData(0);
 
-      const chunk = playbackQueueRef.current.shift();
-      if (!chunk) return;
+    for (let i = 0; i < pcmChunk.length; i++) {
+      channel[i] = pcmChunk[i] / 32768;
+    }
 
-      const audioBuffer = ctx.createBuffer(1, chunk.length, 24000);
-      const channel = audioBuffer.getChannelData(0);
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(ctx.destination);
 
-      for (let i = 0; i < chunk.length; i++) {
-        channel[i] = chunk[i] / 32768;
-      }
+    const now = ctx.currentTime;
+    const startTime =
+      nextPlaybackTimeRef.current > now ? nextPlaybackTimeRef.current : now;
 
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(ctx.destination);
-      source.start();
-    }, 40);
+    source.start(startTime);
+
+    nextPlaybackTimeRef.current = startTime + audioBuffer.duration;
+
+    console.log(
+      "🔊 WS DEBUG: scheduled chunk",
+      `samples=${pcmChunk.length}`,
+      `duration=${audioBuffer.duration.toFixed(3)}s`,
+      `start=${startTime.toFixed(3)}`,
+      `next=${nextPlaybackTimeRef.current.toFixed(3)}`
+    );
   }, []);
 
   const stopMicrophoneCapture = useCallback(() => {
@@ -313,6 +301,8 @@ Your goals:
         playbackAudioContextRef.current = new AudioContext({ sampleRate: 24000 });
       }
 
+      nextPlaybackTimeRef.current = playbackAudioContextRef.current.currentTime;
+
       const session = new RealtimeSession(agent, {
         transport: "websocket",
         model: "gpt-realtime",
@@ -365,11 +355,14 @@ Your goals:
         if (data instanceof ArrayBuffer) {
           pcmChunk = new Int16Array(data);
         } else if (ArrayBuffer.isView(data)) {
-          pcmChunk = new Int16Array(data.buffer.slice(0));
+          const view = data as ArrayBufferView;
+          pcmChunk = new Int16Array(
+            view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength)
+          );
         }
 
         if (pcmChunk) {
-          playbackQueueRef.current.push(pcmChunk);
+          schedulePcm16Playback(pcmChunk);
         }
       });
 
@@ -380,8 +373,6 @@ Your goals:
 
       session.on("audio_stopped", () => {
         console.log("🛑 WS DEBUG: audio_stopped");
-        // commit the current user turn
-        // session.sendAudio(new ArrayBuffer(0), { commit: true });
         setStatus("Processing...");
       });
 
@@ -395,10 +386,11 @@ Your goals:
         console.error("❌ WS DEBUG: realtime session error.error", err?.error);
         console.error("❌ WS DEBUG: realtime session error.message", err?.message);
         console.error("❌ WS DEBUG: realtime session error JSON", JSON.stringify(err, null, 2));
+
         setError(
           err?.error?.message ??
-          err?.message ??
-          "Something went wrong in the voice session."
+            err?.message ??
+            "Something went wrong in the voice session."
         );
         setStatus("Error");
       });
@@ -410,7 +402,6 @@ Your goals:
 
       console.log("✅ WS DEBUG: websocket session connected");
 
-      startPlaybackLoop();
       await startMicrophoneCapture(session);
 
       setIsConnected(true);
@@ -431,8 +422,8 @@ Your goals:
     agent,
     isConnected,
     isConnecting,
+    schedulePcm16Playback,
     startMicrophoneCapture,
-    startPlaybackLoop,
     stopConversation,
   ]);
 
