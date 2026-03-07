@@ -23,8 +23,8 @@ function normalizeSeverity(value) {
 
 function normalizeConfidence(value) {
   const num = Number(value);
-  if (!Number.isFinite(num)) return 0.5;
-  return Math.max(0, Math.min(1, num));
+  if (!Number.isFinite(num)) return 50;
+  return Math.round(Math.max(0, Math.min(1, num)) * 100);
 }
 
 async function assessConversationSeverity(turns) {
@@ -186,7 +186,7 @@ export function setupSocket(io) {
     let urgentDowngradeStreak = 0;
     let latestSeverity = {
       severity: "uncertain",
-      severity_conf: 0.25,
+      severity_conf: 25,
       severity_reason: "Awaiting enough context to assess severity.",
     };
 
@@ -317,7 +317,7 @@ export function setupSocket(io) {
             triage: "agent",
             classification: "uncertain",
             severity: "uncertain",
-            severity_conf: 0.25,
+            severity_conf: 25,
             severity_reason: "Awaiting enough context to assess severity.",
           }])
           .select();
