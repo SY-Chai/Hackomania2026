@@ -321,6 +321,7 @@ export default function Page() {
           <div className="flex-1 space-y-4 overflow-y-auto px-6 py-6">
             {messages.map((message) => {
               const isUser = message.role === "user";
+              const isAssistant = message.role === "assistant";
               const isAgent = message.role === "agent";
 
               return (

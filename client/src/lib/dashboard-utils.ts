@@ -27,33 +27,29 @@ export function toUIConversations(raw: (DBConversation & { messages: DBMessage[]
       sender: deriveRole(m.author),
       senderName: m.author,
       content: m.content ?? "",
-      timestamp: m.start ?? "",
+      timestamp: m.timestamp ?? "",
     }));
     const lastMsg = messages[messages.length - 1];
     return {
       id: c.id,
       phase: normalizePhase(c.triage),
       classification: c.classification,
-      startedAt: c.timestamp,
-      lastActivity: lastMsg?.timestamp ?? c.timestamp,
+      startedAt: c.start,
+      lastActivity: lastMsg?.timestamp ?? c.start,
       messages,
     };
   });
 }
 
-export function toPABMarkers(pabs: DBPAB[], ongoingConversations: DBConversation[]): PABMarker[] {
+export function toPABMarkers(pabs: DBPAB[], _ongoingConversations: DBConversation[]): PABMarker[] {
   const validPABs = pabs.filter((p) => p.latitude != null && p.longitude != null);
-  const pabsWithCall = new Set<string>(
-    ongoingConversations.flatMap((c) => (c.pab_id ? [c.pab_id] : [])),
-  );
-
   return validPABs.map((p) => ({
     id: p.id,
-    name: p.unit ?? p.id,
+    name: p.unit_no ?? p.id,
     lat: p.latitude!,
     lng: p.longitude!,
-    status: pabsWithCall.has(p.id) ? ("call" as const) : ("active" as const),
-    address: p.unit ?? "",
-    town: p.unit ?? "",
+    status: "active" as const,
+    address: [p.unit_no, p.street_name].filter(Boolean).join(" "),
+    town: p.street_name ?? "",
   }));
 }

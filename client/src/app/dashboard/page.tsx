@@ -23,21 +23,22 @@ export default async function DashboardPage() {
       fetchConversationsWithMessages(),
       fetchConversations(),
     ]);
-  } catch {
+  } catch (e) {
+    console.error("[dashboard] parallel fetch failed:", e);
     try {
       pabs = await fetchPABs();
-    } catch {
-      /* empty */
+    } catch (e2) {
+      console.error("[dashboard] fetchPABs failed:", e2);
     }
     try {
       rawConversations = await fetchConversationsWithMessages();
-    } catch {
-      /* empty */
+    } catch (e2) {
+      console.error("[dashboard] fetchConversationsWithMessages failed:", e2);
     }
     try {
       allConversations = await fetchConversations();
-    } catch {
-      /* empty */
+    } catch (e2) {
+      console.error("[dashboard] fetchConversations failed:", e2);
     }
   }
 

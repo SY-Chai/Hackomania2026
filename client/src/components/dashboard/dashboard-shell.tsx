@@ -1,13 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import {
-  PanelLeftOpen,
-  MapPin,
-  Phone,
-  AlertTriangle,
-  Users,
-} from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { MapPin, Phone, AlertTriangle, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConversationsView, type UIConversation } from "./conversations-view";
 import { SingaporeMap, type PABMarker } from "@/components/map/singapore-map";
@@ -26,44 +20,102 @@ const STATS = (stationary: number, ongoing: number) => [
   { label: "Wearables", value: 0, Icon: Users },
 ];
 
+const DEFAULT_WIDTH = 560;
+const MIN_WIDTH = 280;
+const COLLAPSE_THRESHOLD = 120;
+
 export function DashboardShell({
   conversations,
   mapPABs,
   stationary,
   ongoing,
 }: Props) {
-  const [expanded, setExpanded] = useState(true);
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
+  const [collapsed, setCollapsed] = useState(false);
+
+  // Refs to track drag state without causing re-renders
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const wasDragged = useRef(false);
+  const isDragging = useRef(false);
+
+  const onSeparatorMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      wasDragged.current = false;
+      isDragging.current = true;
+      dragRef.current = {
+        startX: e.clientX,
+        startWidth: collapsed ? 0 : panelWidth,
+      };
+    },
+    [collapsed, panelWidth],
+  );
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!dragRef.current) return;
+      const delta = e.clientX - dragRef.current.startX;
+      if (Math.abs(delta) > 4) wasDragged.current = true;
+      const newWidth = dragRef.current.startWidth + delta;
+      if (newWidth < COLLAPSE_THRESHOLD) {
+        setCollapsed(true);
+      } else {
+        setCollapsed(false);
+        setPanelWidth(Math.max(MIN_WIDTH, Math.min(newWidth, 1000)));
+      }
+    };
+
+    const onMouseUp = () => {
+      dragRef.current = null;
+      isDragging.current = false;
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
+
+  const onSeparatorClick = useCallback(() => {
+    if (wasDragged.current) return;
+    setCollapsed((prev) => !prev);
+  }, []);
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-full overflow-hidden select-none">
       {/* Left: Conversations panel */}
       <div
-        className={cn(
-          "flex flex-col border-r border-slate-200 shrink-0 overflow-hidden transition-[width] duration-200",
-          expanded ? "w-[560px]" : "w-0",
-        )}
+        style={{ width: collapsed ? 0 : panelWidth }}
+        className="flex flex-col shrink-0 overflow-hidden"
       >
         <ConversationsView
           conversations={conversations}
-          onCollapse={() => setExpanded(false)}
+          onCollapse={() => setCollapsed(true)}
         />
       </div>
 
-      {/* Right: Map */}
-      <div className="flex-1 flex flex-col min-w-0 gap-3">
-        {/* Small re-expand button when conversations is hidden */}
-        {!expanded && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setExpanded(true)}
-              className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-slate-500 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 rounded transition-colors"
-            >
-              <PanelLeftOpen className="w-3.5 h-3.5" />
-              Conversations
-            </button>
-          </div>
+      {/* Draggable separator */}
+      <div
+        onMouseDown={onSeparatorMouseDown}
+        onClick={onSeparatorClick}
+        title={collapsed ? "Click to expand" : "Drag to resize · Click to collapse"}
+        className={cn(
+          "relative w-2 shrink-0 cursor-col-resize flex items-center justify-center group z-10",
+          "bg-slate-200 hover:bg-slate-300 active:bg-slate-400 transition-colors duration-100",
         )}
+      >
+        {/* Grip dots */}
+        <div className="flex flex-col gap-[3px] opacity-50 group-hover:opacity-100 transition-opacity">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="w-1 h-1 rounded-full bg-slate-500" />
+          ))}
+        </div>
+      </div>
 
+      {/* Right: Map */}
+      <div className="flex-1 flex flex-col min-w-0">
         <div className="flex-1 min-h-0 relative rounded border border-slate-200 overflow-hidden">
           <SingaporeMap pabs={mapPABs} />
           {/* Compact stats overlay — top left */}

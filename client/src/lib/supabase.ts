@@ -9,18 +9,19 @@ export const supabase = createClient(supabaseUrl, supabaseKey);
 
 export interface DBConversation {
   id: string;
-  timestamp: string | null;
+  start: string | null;
+  end: string | null;
   triage: string | null;
   classification: string | null;
-  pab_id?: string | null;
+  summary: string | null;
+  audio_url: string | null;
 }
 
 export interface DBMessage {
   id: string;
   author: string;
   content: string | null;
-  start: string | null;
-  end: string | null;
+  timestamp: string | null;
   conversation_id: string;
 }
 
@@ -28,7 +29,9 @@ export interface DBPAB {
   id: string;
   longitude: number | null;
   latitude: number | null;
-  unit: string | null;
+  unit_no: string | null;
+  postal_code: string | null;
+  street_name: string | null;
 }
 
 export interface DBElderly {
@@ -44,16 +47,18 @@ export async function fetchConversations(): Promise<DBConversation[]> {
   const { data, error } = await supabase
     .from("conversations")
     .select("*")
-    .order("timestamp", { ascending: false });
+    .order("start", { ascending: false });
   if (error) throw error;
   return data ?? [];
 }
 
-export async function fetchConversationsWithMessages(): Promise<(DBConversation & { messages: DBMessage[] })[]> {
+export async function fetchConversationsWithMessages(): Promise<
+  (DBConversation & { messages: DBMessage[] })[]
+> {
   const { data: convs, error: convErr } = await supabase
     .from("conversations")
     .select("*")
-    .order("timestamp", { ascending: false });
+    .order("start", { ascending: false });
 
   if (convErr) throw convErr;
   if (!convs?.length) return [];
@@ -61,17 +66,23 @@ export async function fetchConversationsWithMessages(): Promise<(DBConversation 
   const { data: msgs, error: msgErr } = await supabase
     .from("messages")
     .select("*")
-    .in("conversation_id", convs.map((c) => c.id))
-    .order("start", { ascending: true });
+    .in(
+      "conversation_id",
+      convs.map((c) => c.id),
+    )
+    .order("timestamp", { ascending: true });
 
   if (msgErr) throw msgErr;
 
-  const msgsByConv = (msgs ?? []).reduce<Record<string, DBMessage[]>>((acc, m) => {
-    const cid = m.conversation_id;
-    if (!acc[cid]) acc[cid] = [];
-    acc[cid].push(m);
-    return acc;
-  }, {});
+  const msgsByConv = (msgs ?? []).reduce<Record<string, DBMessage[]>>(
+    (acc, m) => {
+      const cid = m.conversation_id;
+      if (!acc[cid]) acc[cid] = [];
+      acc[cid].push(m);
+      return acc;
+    },
+    {},
+  );
 
   return convs.map((c) => ({
     ...c,
