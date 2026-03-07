@@ -1,12 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, Suspense } from "react";
 import { AlertCircle, Loader2, Mic, PhoneOff } from "lucide-react";
 import { io, Socket } from "socket.io-client";
+import { useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { resolveSocketServerUrl } from "@/lib/socket";
 import { resampleTo24k, schedulePcm16Playback } from "@/lib/audio";
+import { supabaseBrowser } from "@/lib/supabase";
 
 type ChatMessage = {
   id: string;
@@ -14,8 +16,30 @@ type ChatMessage = {
   text: string;
 };
 
+// Extracted inner component to use useSearchParams
+function ButtonPageContent() {
+  const searchParams = useSearchParams();
+  const [pabId, setPabId] = useState<string | null>(null);
 
-export default function Page() {
+  useEffect(() => {
+    const param = searchParams.get("pab_id");
+    if (param === "random") {
+      // Fetch a random PAB
+      supabaseBrowser
+        .from("pabs")
+        .select("id")
+        .limit(10)
+        .then(({ data }: { data: { id: string }[] | null }) => {
+          if (data && data.length > 0) {
+            const randomPab = data[Math.floor(Math.random() * data.length)];
+            setPabId(randomPab.id);
+          }
+        });
+    } else if (param) {
+      setPabId(param);
+    }
+  }, [searchParams]);
+
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "intro",
@@ -152,11 +176,12 @@ export default function Page() {
     socketRef.current = socket;
 
     socket.on("connect", () => {
-      console.log("✅ WS DEBUG: Connected to backend Socket.IO");
-      socket.emit("start_emergency_session");
+      console.log(`✅ WS DEBUG: Connected to backend Socket.IO. Sending PAB ID: ${pabId}`);
+      socket.emit("start_emergency_session", { pab_id: pabId });
     });
 
     socket.on("session_started", () => {
+
       console.log("✅ WS DEBUG: OpenAI emergency session started");
       setStatus("Connected — speak now");
       setIsConnected(true);
@@ -210,6 +235,7 @@ export default function Page() {
     });
 
   }, [
+    pabId,
     isConnected,
     isConnecting,
     schedulePlayback,
@@ -245,10 +271,10 @@ export default function Page() {
           <div className="flex items-center gap-3 border-b border-slate-200 px-6 py-4 text-sm">
             <div
               className={`h-2.5 w-2.5 rounded-full ${isConnected
-                  ? "bg-green-500"
-                  : isConnecting
-                    ? "bg-yellow-500"
-                    : "bg-slate-300"
+                ? "bg-green-500"
+                : isConnecting
+                  ? "bg-yellow-500"
+                  : "bg-slate-300"
                 }`}
             />
             <span className="text-slate-700">{status}</span>
@@ -263,10 +289,10 @@ export default function Page() {
                 <div
                   key={message.id}
                   className={`max-w-[85%] rounded px-4 py-3 text-sm leading-6 ${isUser
-                      ? "ml-auto bg-slate-900 text-white"
-                      : isUser
-                        ? "bg-slate-100 text-slate-900 border border-slate-200"
-                        : "bg-white text-slate-600 border border-slate-200"
+                    ? "ml-auto bg-slate-900 text-white"
+                    : isUser
+                      ? "bg-slate-100 text-slate-900 border border-slate-200"
+                      : "bg-white text-slate-600 border border-slate-200"
                     }`}
                 >
                   <div
@@ -326,12 +352,30 @@ export default function Page() {
 
           <div className="max-w-sm rounded border border-slate-200 bg-white p-4 text-sm text-slate-700">
             <div className="mb-2 font-medium text-slate-900">System Architecture</div>
-            <p>
+            <p className="mb-2">
               This version securely proxies bidirectional audio via WebSockets on the Node.js backend. The frontend captures audio, streams to the backend, and the backend communicates with OpenAI.
             </p>
+            {pabId ? (
+              <p className="font-semibold text-blue-600 break-all">Active PAB ID: {pabId}</p>
+            ) : (
+              <p className="text-slate-400">No specific PAB specified for this test.</p>
+            )}
           </div>
         </aside>
       </div>
     </main>
+  );
+}
+
+export default function Page() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-500">
+        <Loader2 className="mr-2 h-6 w-6 animate-spin" />
+        Loading...
+      </div>
+    }>
+      <ButtonPageContent />
+    </Suspense>
   );
 }

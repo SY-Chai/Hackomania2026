@@ -295,7 +295,9 @@ export function setupSocket(io) {
     // Emergency session
     // ------------------------------------------------------------------
 
-    socket.on("start_emergency_session", async () => {
+    socket.on("start_emergency_session", async (data) => {
+      const pabId = data?.pab_id || null; // Will fallback to null if not provided
+      
       if (openAiWs) {
         console.log(`[Socket ${socket.id}] WebSocket already exists.`);
         return;
@@ -306,10 +308,10 @@ export function setupSocket(io) {
         return;
       }
 
-      console.log(`[Socket ${socket.id}] Starting emergency session with OpenAI`);
+      console.log(`[Socket ${socket.id}] Starting emergency session with OpenAI. PAB ID: ${pabId}`);
 
       if (supabase) {
-        const { data, error } = await supabase
+        const { data: dbData, error } = await supabase
           .from("conversations")
           .insert([{
             start: getUTC8Time(),
@@ -324,13 +326,14 @@ export function setupSocket(io) {
 
         if (error) {
           console.error(`❌ [Socket ${socket.id}] Failed to create conversation:`, error);
-        } else if (data?.length > 0) {
-          activeConversationId = data[0].id;
+        } else if (dbData?.length > 0) {
+          activeConversationId = dbData[0].id;
           socket.join(activeConversationId);
           liveConversationSessions.set(activeConversationId, {
             callerSocketId: socket.id,
             operatorSocketId: null,
             takeoverActive: false,
+            pabId: pabId // Store it in session map
           });
           io.emit("severity_update", {
             conversationId: activeConversationId,
@@ -384,7 +387,16 @@ export function setupSocket(io) {
             fullConversationPcm.push(fullPcmBuffer);
             fullConversationPcmBytes += fullPcmBuffer.length;
           }
-          saveMessage(activeConversationId, role, event.transcript, notifyDashboard);
+          
+          let authorIdToSave = null;
+          if (role === "agent") {
+            authorIdToSave = process.env.AGENT_ID;
+          } else if (role === "user") {
+            const session = liveConversationSessions.get(activeConversationId);
+            authorIdToSave = session?.pabId || null;
+          }
+           
+          saveMessage(activeConversationId, authorIdToSave, event.transcript, notifyDashboard);
         }
       }
 

@@ -263,14 +263,14 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
         prev.map((conv) =>
           conv.id === event.conversationId
             ? {
-                ...conv,
-                severity: event.severity ?? conv.severity,
-                severityConf:
-                  event.severity_conf == null
-                    ? conv.severityConf
-                    : event.severity_conf,
-                severityReason: event.severity_reason ?? conv.severityReason,
-              }
+              ...conv,
+              severity: event.severity ?? conv.severity,
+              severityConf:
+                event.severity_conf == null
+                  ? conv.severityConf
+                  : event.severity_conf,
+              severityReason: event.severity_reason ?? conv.severityReason,
+            }
             : conv,
         ),
       );
@@ -311,13 +311,13 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
         prev.map((conv) =>
           conv.id === c.id
             ? {
-                ...conv,
-                phase: normalizePhase(c.triage),
-                classification: c.classification,
-                severity: c.severity,
-                severityConf: c.severity_conf,
-                severityReason: c.severity_reason,
-              }
+              ...conv,
+              phase: normalizePhase(c.triage),
+              classification: c.classification,
+              severity: c.severity,
+              severityConf: c.severity_conf,
+              severityReason: c.severity_reason,
+            }
             : conv,
         ),
       );
@@ -325,10 +325,11 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
     es.addEventListener("message_insert", (e) => {
       const m = JSON.parse(e.data) as DBMessage;
+      const role = deriveRole(m.author_id);
       const newMsg = {
         id: m.id,
-        sender: deriveRole(m.author),
-        senderName: m.author,
+        sender: role,
+        senderName: role === "agent" ? "AI Agent" : role === "human" ? "Operator" : "Senior",
         content: m.content ?? "",
         timestamp: m.timestamp ?? "",
       };
@@ -336,10 +337,10 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
         prev.map((conv) =>
           conv.id === m.conversation_id
             ? {
-                ...conv,
-                lastActivity: m.timestamp ?? conv.lastActivity,
-                messages: [...conv.messages, newMsg],
-              }
+              ...conv,
+              lastActivity: m.timestamp ?? conv.lastActivity,
+              messages: [...conv.messages, newMsg],
+            }
             : conv,
         ),
       );

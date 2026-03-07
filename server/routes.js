@@ -65,12 +65,12 @@ export function createRouter(io) {
     if (!supabase)
       return res.status(500).json({ error: "Supabase not configured" });
 
-    const { conversation_id, author, content, timestamp } = req.body;
+    const { conversation_id, author_id, content, timestamp } = req.body;
     const { data, error } = await supabase
       .from("messages")
       .insert([{
         conversation_id,
-        author,
+        author_id,
         content,
         timestamp: timestamp || getUTC8Time(),
       }])

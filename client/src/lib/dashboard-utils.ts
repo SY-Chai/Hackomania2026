@@ -3,11 +3,17 @@ import type { UIConversation, UIMessage } from "@/components/dashboard/conversat
 import type { PABMarker } from "@/components/map/singapore-map";
 
 const CLOSED_STATUSES = new Set(["resolved", "closed", "completed", "done"]);
+export function deriveRole(authorId: string | null): "senior" | "agent" | "human" {
+  if (!authorId) return "senior";
 
-export function deriveRole(author: string): "senior" | "agent" | "human" {
-  const lower = author.toLowerCase();
-  if (lower.includes("pab assistant") || lower === "agent" || lower === "assistant") return "agent";
-  if (lower.startsWith("nurse") || lower.startsWith("dr ") || lower.startsWith("doctor")) return "human";
+  // Using NEXT_PUBLIC environment variables in Next.js
+  const agentId = process.env.NEXT_PUBLIC_AGENT_ID;
+  const operatorId = process.env.NEXT_PUBLIC_OPERATOR_ID;
+
+  if (agentId && authorId === agentId) return "agent";
+  if (operatorId && authorId === operatorId) return "human";
+
+  // Assume if it's not the agent or the operator, it's the PAB/Senior.
   return "senior";
 }
 
@@ -22,13 +28,16 @@ export function isOngoing(c: DBConversation): boolean {
 
 export function toUIConversations(raw: (DBConversation & { messages: DBMessage[] })[]): UIConversation[] {
   return raw.map((c) => {
-    const messages: UIMessage[] = c.messages.map((m) => ({
-      id: m.id,
-      sender: deriveRole(m.author),
-      senderName: m.author,
-      content: m.content ?? "",
-      timestamp: m.timestamp ?? "",
-    }));
+    const messages: UIMessage[] = c.messages.map((m) => {
+      const role = deriveRole(m.author_id);
+      return {
+        id: m.id,
+        sender: role,
+        senderName: role === "agent" ? "AI Agent" : role === "human" ? "Operator" : "Senior",
+        content: m.content ?? "",
+        timestamp: m.timestamp ?? "",
+      };
+    });
     const lastMsg = messages[messages.length - 1];
     return {
       id: c.id,
@@ -44,14 +53,23 @@ export function toUIConversations(raw: (DBConversation & { messages: DBMessage[]
   });
 }
 
-export function toPABMarkers(pabs: DBPAB[], _ongoingConversations: DBConversation[]): PABMarker[] {
+export function toPABMarkers(pabs: DBPAB[], ongoingConversations: (DBConversation & { messages: DBMessage[] })[]): PABMarker[] {
+  const ongoingPabIds = new Set(
+    ongoingConversations
+      .map((c) => {
+        const userMsg = c.messages.find(m => deriveRole(m.author_id) === "senior");
+        return userMsg ? userMsg.author_id : null;
+      })
+      .filter((id): id is string => typeof id === "string")
+  );
+
   const validPABs = pabs.filter((p) => p.latitude != null && p.longitude != null);
   return validPABs.map((p) => ({
     id: p.id,
     name: p.unit_no ?? p.id,
     lat: p.latitude!,
     lng: p.longitude!,
-    status: "active" as const,
+    status: ongoingPabIds.has(p.id) ? "call" : ("active" as const),
     address: [p.unit_no, p.street_name].filter(Boolean).join(" "),
     town: p.street_name ?? "",
   }));

@@ -4,14 +4,14 @@ import { getUTC8Time } from "./utils.js";
 /**
  * @param {Function} [notifyFn] - optional callback called after a successful write (e.g. notifyDashboard)
  */
-export async function saveMessage(conversationId, author, text, notifyFn) {
+export async function saveMessage(conversationId, authorId, text, notifyFn) {
   if (!supabase || !conversationId) return;
 
   const { data, error } = await supabase
     .from("messages")
     .insert([{
       conversation_id: conversationId,
-      author,
+      author_id: authorId,
       content: text || "",
       timestamp: getUTC8Time(),
     }])
@@ -21,7 +21,7 @@ export async function saveMessage(conversationId, author, text, notifyFn) {
     console.error("❌ Failed to save message to Supabase:", error);
   } else {
     const savedId = data?.[0]?.id || "unknown";
-    console.log(`✅ Saved ${author} message to Supabase DB ID: ${savedId}`);
+    console.log(`✅ Saved message to Supabase DB ID: ${savedId}`);
     notifyFn?.();
   }
 }

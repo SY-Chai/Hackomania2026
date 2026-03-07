@@ -3,8 +3,15 @@ import { createClient } from "@supabase/supabase-js";
 const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_SECRET_KEY!;
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+export const supabase = typeof window === 'undefined' && process.env.SUPABASE_SECRET_KEY
+  ? createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SECRET_KEY!)
+  : null;
 
+// Browser client (publishable key — safe to expose)
+export const supabaseBrowser = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
+);
 // --- Types matching the DB schema ---
 
 export interface DBConversation {
@@ -22,7 +29,7 @@ export interface DBConversation {
 
 export interface DBMessage {
   id: string;
-  author: string;
+  author_id: string | null;
   content: string | null;
   timestamp: string | null;
   conversation_id: string;
@@ -47,7 +54,7 @@ export interface DBElderly {
 // --- Fetch helpers ---
 
 export async function fetchConversations(): Promise<DBConversation[]> {
-  const { data, error } = await supabase
+  const { data, error } = await supabase!
     .from("conversations")
     .select("*")
     .order("start", { ascending: false });
@@ -58,7 +65,7 @@ export async function fetchConversations(): Promise<DBConversation[]> {
 export async function fetchConversationsWithMessages(): Promise<
   (DBConversation & { messages: DBMessage[] })[]
 > {
-  const { data: convs, error: convErr } = await supabase
+  const { data: convs, error: convErr } = await supabase!
     .from("conversations")
     .select("*")
     .order("start", { ascending: false });
@@ -66,7 +73,7 @@ export async function fetchConversationsWithMessages(): Promise<
   if (convErr) throw convErr;
   if (!convs?.length) return [];
 
-  const { data: msgs, error: msgErr } = await supabase
+  const { data: msgs, error: msgErr } = await supabase!
     .from("messages")
     .select("*")
     .in(
@@ -99,7 +106,7 @@ export async function fetchPABs(): Promise<DBPAB[]> {
   const all: DBPAB[] = [];
 
   while (true) {
-    const { data, error } = await supabase
+    const { data, error } = await supabase!
       .from("pabs")
       .select("*")
       .range(page * pageSize, (page + 1) * pageSize - 1);

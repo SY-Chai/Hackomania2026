@@ -42,7 +42,7 @@ export default async function DashboardPage() {
     }
   }
 
-  const ongoing = allConversations.filter(isOngoing);
+  const ongoing = rawConversations.filter(isOngoing);
 
   return (
     <DashboardShell
