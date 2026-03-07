@@ -12,13 +12,16 @@
 
 // ---- WebSocket server ----
 #ifndef WS_HOST
-#define WS_HOST "172.29.17.88" // backend server IP
+#define WS_HOST "hackomania2026.onrender.com" // hostname only, no scheme
 #endif
 #ifndef WS_PORT
-#define WS_PORT 3001
+#define WS_PORT 443
 #endif
 #ifndef WS_PATH
 #define WS_PATH "/esp32-phone" // optional: /esp32-phone?pab_id=<PAB_UUID>
+#endif
+#ifndef WS_SECURE
+#define WS_SECURE 1 // 1 = wss (Render), 0 = ws (local dev)
 #endif
 
 // mic (PDM)
@@ -394,7 +397,11 @@ void setup()
   Serial.printf("\nWiFi connected! IP: %s\n", WiFi.localIP().toString().c_str());
 
   // Connect WebSocket
+#if WS_SECURE
+  ws.beginSSL(WS_HOST, WS_PORT, WS_PATH);
+#else
   ws.begin(WS_HOST, WS_PORT, WS_PATH);
+#endif
   ws.onEvent(onWsEvent);
   ws.setReconnectInterval(3000);
 

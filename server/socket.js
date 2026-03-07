@@ -851,12 +851,21 @@ export function setupSocket(io) {
         return;
 
       const buf = Buffer.from(audio);
+      let forwarded = false;
       if (isEsp32SessionLive(session)) {
-        forwardOperatorAudioToEsp32(session, buf);
+        forwarded = forwardOperatorAudioToEsp32(session, buf);
       } else if (session.callerSocketId) {
         io.to(session.callerSocketId).emit("server_audio", buf);
+        forwarded = true;
       }
-      socket.to(conversationId).emit("conversation_audio", "agent", buf);
+
+      if (forwarded) {
+        socket.to(conversationId).emit("conversation_audio", "agent", buf);
+      } else if (session.source === "esp32") {
+        console.warn(
+          `⚠ [Socket ${socket.id}] operator_audio dropped for ESP32 conversation ${conversationId} (${buf.length} bytes)`,
+        );
+      }
     });
 
     socket.on("operator_takeover_stop", (conversationId) => {
