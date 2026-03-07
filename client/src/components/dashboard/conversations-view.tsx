@@ -167,6 +167,12 @@ function getSeverityRank(severity: UIConversation["severity"]) {
   return 3;
 }
 
+function formatSummaryItem(text: string) {
+  const cleaned = String(text || "").trim();
+  if (!cleaned) return "";
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
 
 
 interface Props {
@@ -906,20 +912,12 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               <span className="text-red-600">{liveAudioError || takeoverError}</span>
             </>
           )}
-          {selected.severityReason && (
-            <>
-              <Separator orientation="vertical" className="h-3" />
-              <span className="text-slate-400 truncate max-w-xs" title={selected.severityReason}>
-                {selected.severityReason}
-              </span>
-            </>
-          )}
         </div>
 
-        <div className="flex-1 overflow-y-auto min-h-0 px-2 py-2">
-          <div className="space-y-4 max-w-3xl">
-            {selectedSummary && (
-              <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="relative flex-1 min-h-0">
+          {selectedSummary && (
+            <div className="absolute left-2 right-4 top-2 z-20 pointer-events-none">
+              <div className="max-w-3xl pointer-events-auto rounded-lg border border-slate-200 bg-white/95 shadow-sm backdrop-blur-sm">
                 <button
                   type="button"
                   onClick={() => setIsSummaryOpen((prev) => !prev)}
@@ -936,41 +934,71 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                   )}
                 </button>
                 {isSummaryOpen && (
-                  <div className="px-3 pb-3 space-y-2 text-xs text-slate-700">
+                  <div className="px-3 pb-3 space-y-3 text-xs text-slate-700">
                     <div>
-                      <p className="text-[11px] font-semibold text-slate-900">Overview</p>
-                      <p className="mt-0.5">{selectedSummary.incident_overview}</p>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Overview</p>
+                      <p className="mt-1 text-[13px] leading-relaxed text-slate-800">
+                        {formatSummaryItem(selectedSummary.incident_overview)}
+                      </p>
+                      {selected.severityReason && (
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          <span className="font-semibold text-slate-600">Severity reason:</span>{" "}
+                          {formatSummaryItem(selected.severityReason)}
+                        </p>
+                      )}
                     </div>
 
                     {selectedSummary.key_symptoms.length > 0 && (
                       <div>
-                        <p className="text-[11px] font-semibold text-slate-900">Symptoms</p>
-                        <p className="mt-0.5">{selectedSummary.key_symptoms.join(" | ")}</p>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Symptoms</p>
+                        <ul className="mt-1 flex flex-wrap gap-1.5">
+                          {selectedSummary.key_symptoms.map((item, idx) => (
+                            <li
+                              key={`symptom-${idx}`}
+                              className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] text-red-700"
+                            >
+                              {formatSummaryItem(item)}
+                            </li>
+                          ))}
+                        </ul>
                       </div>
                     )}
 
                     {selectedSummary.risk_factors.length > 0 && (
                       <div>
-                        <p className="text-[11px] font-semibold text-slate-900">Risk Factors</p>
-                        <p className="mt-0.5">{selectedSummary.risk_factors.join(" | ")}</p>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Risk Factors</p>
+                        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[12px] text-slate-700">
+                          {selectedSummary.risk_factors.map((item, idx) => (
+                            <li key={`risk-${idx}`}>{formatSummaryItem(item)}</li>
+                          ))}
+                        </ul>
                       </div>
                     )}
 
                     {selectedSummary.actions_taken.length > 0 && (
                       <div>
-                        <p className="text-[11px] font-semibold text-slate-900">Actions Taken</p>
-                        <p className="mt-0.5">{selectedSummary.actions_taken.join(" | ")}</p>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Actions Taken</p>
+                        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[12px] text-slate-700">
+                          {selectedSummary.actions_taken.map((item, idx) => (
+                            <li key={`action-${idx}`}>{formatSummaryItem(item)}</li>
+                          ))}
+                        </ul>
                       </div>
                     )}
 
-                    <div>
-                      <p className="text-[11px] font-semibold text-slate-900">Next Step</p>
-                      <p className="mt-0.5">{selectedSummary.recommended_next_step}</p>
+                    <div className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-blue-700">Recommended Next Step</p>
+                      <p className="mt-1 text-[12px] leading-relaxed text-blue-900">
+                        {formatSummaryItem(selectedSummary.recommended_next_step)}
+                      </p>
                     </div>
                   </div>
                 )}
               </div>
-            )}
+            </div>
+          )}
+          <div className="h-full overflow-y-auto pl-2 pr-4 py-2">
+            <div className="space-y-4 max-w-3xl">
             {selected.messages.map((msg) => {
               const cfg = senderConfig[msg.sender];
               const Icon = cfg.icon;
@@ -1022,6 +1050,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 </div>
               );
             })}
+            </div>
           </div>
         </div>
       </div>

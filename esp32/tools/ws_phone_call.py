@@ -9,7 +9,7 @@ Your laptop mic -> ESP32 speaker
 ESP32 mic -> your laptop speaker
 
 Both directions run simultaneously, like a phone call.
-Audio: 16-bit signed PCM, mono, 16kHz, little-endian.
+Audio: 16-bit signed PCM, mono, 24kHz, little-endian.
 """
 
 import asyncio
@@ -22,53 +22,16 @@ import websockets
 
 HOST = "0.0.0.0"
 PORT = 8080
-SAMPLE_RATE = 8000
+SAMPLE_RATE = 24000
 CHANNELS = 1
 FORMAT = pyaudio.paInt16
-# 640 quite good
-CHUNK = 640  # samples per chunk (80ms), must match ESP32 MIC_CHUNK_SAMPLES
+# 1920 samples @ 24kHz = 80ms, must match ESP32 MIC_CHUNK_SAMPLES
+CHUNK = 1920
 MAX_SPEAKER_QUEUE = 10  # must be >= JITTER_MAX for jitter buffer to work
-LAPTOP_MIC_GAIN = 1    # software gain for laptop mic (1 = no boost)
-LAPTOP_NOISE_GATE = 400  # zero out laptop mic samples below this (prevents ESP32 echo gate locking)
+LAPTOP_MIC_GAIN = 1  # software gain for laptop mic (1 = no boost)
+LAPTOP_NOISE_GATE = 600  # zero out laptop mic samples below this (prevents ESP32 echo gate locking)
 
 pa = pyaudio.PyAudio()
-
-
-# ---- G.711 µ-law codec (halves bandwidth: 16-bit PCM ↔ 8-bit µ-law) ----
-def pcm16_to_ulaw_buf(pcm_data):
-    """Encode 16-bit LE PCM bytes → µ-law bytes (2:1 compression)"""
-    BIAS = 0x84
-    samples = struct.unpack('<{}h'.format(len(pcm_data) // 2), pcm_data)
-    ulaw = bytearray(len(samples))
-    for i, pcm in enumerate(samples):
-        sign = 0x80 if pcm < 0 else 0
-        if pcm < 0: pcm = -pcm
-        if pcm > 32635: pcm = 32635
-        pcm += BIAS
-        exp = 7
-        mask = 0x4000
-        while not (pcm & mask) and exp > 0:
-            exp -= 1
-            mask >>= 1
-        mantissa = (pcm >> (exp + 3)) & 0x0F
-        ulaw[i] = ~(sign | (exp << 4) | mantissa) & 0xFF
-    return bytes(ulaw)
-
-
-def ulaw_to_pcm16_buf(ulaw_data):
-    """Decode µ-law bytes → 16-bit LE PCM bytes (1:2 expansion)"""
-    BIAS = 0x84
-    samples = []
-    for u in ulaw_data:
-        u = ~u & 0xFF
-        sign = u & 0x80
-        exp = (u >> 4) & 0x07
-        mantissa = u & 0x0F
-        sample = ((mantissa << 3) + BIAS) << exp
-        sample -= BIAS
-        if sign: sample = -sample
-        samples.append(max(-32768, min(32767, sample)))
-    return struct.pack('<{}h'.format(len(samples)), *samples)
 
 
 def list_audio_devices():
@@ -80,9 +43,11 @@ def list_audio_devices():
             tag += " [DEFAULT INPUT]"
         if i == pa.get_default_output_device_info()["index"]:
             tag += " [DEFAULT OUTPUT]"
-        print("  {:2d}: {} (in:{} out:{}){}".format(
-            i, info["name"], info["maxInputChannels"],
-            info["maxOutputChannels"], tag))
+        print(
+            "  {:2d}: {} (in:{} out:{}){}".format(
+                i, info["name"], info["maxInputChannels"], info["maxOutputChannels"], tag
+            )
+        )
     print()
 
 
@@ -93,14 +58,14 @@ async def handler(websocket):
     print("  Press Ctrl+C to hang up.\n")
 
     # Open laptop speaker (output) — plays audio FROM the ESP32
-    speaker = pa.open(format=FORMAT, channels=CHANNELS,
-                      rate=SAMPLE_RATE, output=True,
-                      frames_per_buffer=CHUNK)
+    speaker = pa.open(
+        format=FORMAT, channels=CHANNELS, rate=SAMPLE_RATE, output=True, frames_per_buffer=CHUNK
+    )
 
     # Open laptop mic (input) — captures audio TO the ESP32
-    mic = pa.open(format=FORMAT, channels=CHANNELS,
-                  rate=SAMPLE_RATE, input=True,
-                  frames_per_buffer=CHUNK)
+    mic = pa.open(
+        format=FORMAT, channels=CHANNELS, rate=SAMPLE_RATE, input=True, frames_per_buffer=CHUNK
+    )
 
     stop_event = threading.Event()
 
@@ -108,27 +73,27 @@ async def handler(websocket):
     # Must be longer than jitter buffer delay (~240ms) + acoustic propagation.
     ECHO_TAIL_S = 0.4
     last_speaker_time = 0.0
-    SILENCE_ULAW = b'\xff' * CHUNK  # µ-law encoded silence
+    SILENCE_PCM = b"\x00\x00" * CHUNK
 
     # Bounded speaker queue — drops oldest audio if it falls behind
     spk_queue = collections.deque(maxlen=MAX_SPEAKER_QUEUE)
 
     # --- Debug counters (reset every second by status_printer) ---
     dbg = {
-        "rx_packets": 0,    # packets received from ESP32
-        "rx_bytes": 0,      # bytes received from ESP32
-        "rx_peak": 0,       # loudest sample seen from ESP32 this interval
-        "drops": 0,         # chunks dropped because queue was full
-        "underruns": 0,     # times speaker thread found the queue empty
-        "suppressed": 0,    # mic chunks suppressed (echo gate)
+        "rx_packets": 0,  # packets received from ESP32
+        "rx_bytes": 0,  # bytes received from ESP32
+        "rx_peak": 0,  # loudest sample seen from ESP32 this interval
+        "drops": 0,  # chunks dropped because queue was full
+        "underruns": 0,  # times speaker thread found the queue empty
+        "suppressed": 0,  # mic chunks suppressed (echo gate)
     }
-    esp32_talking = False   # is the ESP32 currently sending loud audio?
+    esp32_talking = False  # is the ESP32 currently sending loud audio?
 
     # --- Thread: play audio on laptop speaker (runs in background) ---
     def speaker_thread():
         nonlocal last_speaker_time
-        JITTER_TARGET = 3   # prebuffer this many chunks (~240ms)
-        JITTER_MAX = 7      # drop oldest if buffer exceeds this
+        JITTER_TARGET = 3  # prebuffer this many chunks (~240ms)
+        JITTER_MAX = 7  # drop oldest if buffer exceeds this
         buffering = True
         while not stop_event.is_set():
             if buffering:
@@ -145,7 +110,7 @@ async def handler(websocket):
                 data = spk_queue.popleft()
                 speaker.write(data)
                 # Only mark speaker active if audio is loud enough
-                samples = struct.unpack('<{}h'.format(len(data) // 2), data)
+                samples = struct.unpack("<{}h".format(len(data) // 2), data)
                 peak = max(abs(s) for s in samples) if samples else 0
                 if peak > 2000:
                     last_speaker_time = time.monotonic()
@@ -165,24 +130,22 @@ async def handler(websocket):
         while not stop_event.is_set():
             try:
                 data = await loop.run_in_executor(
-                    None, lambda: mic.read(CHUNK, exception_on_overflow=False))
+                    None, lambda: mic.read(CHUNK, exception_on_overflow=False)
+                )
                 # Apply software gain
                 if LAPTOP_MIC_GAIN != 1:
-                    samples = struct.unpack('<{}h'.format(len(data) // 2), data)
+                    samples = struct.unpack("<{}h".format(len(data) // 2), data)
                     boosted = [max(-32768, min(32767, s * LAPTOP_MIC_GAIN)) for s in samples]
-                    data = struct.pack('<{}h'.format(len(boosted)), *boosted)
+                    data = struct.pack("<{}h".format(len(boosted)), *boosted)
                 # Noise gate: zero out quiet samples so ESP32 echo gate doesn't lock
                 if LAPTOP_NOISE_GATE > 0:
-                    samples = struct.unpack('<{}h'.format(len(data) // 2), data)
+                    samples = struct.unpack("<{}h".format(len(data) // 2), data)
                     gated = [s if abs(s) >= LAPTOP_NOISE_GATE else 0 for s in samples]
-                    data = struct.pack('<{}h'.format(len(gated)), *gated)
+                    data = struct.pack("<{}h".format(len(gated)), *gated)
                 # Suppress mic while speaker is active (echo gate)
                 if (time.monotonic() - last_speaker_time) < ECHO_TAIL_S:
                     dbg["suppressed"] += 1
-                    data = SILENCE_ULAW
-                else:
-                    # Encode PCM → µ-law (halves bandwidth)
-                    data = pcm16_to_ulaw_buf(data)
+                    data = SILENCE_PCM
                 await websocket.send(data)
             except Exception:
                 break
@@ -195,9 +158,9 @@ async def handler(websocket):
                 if isinstance(message, bytes):
                     dbg["rx_packets"] += 1
                     dbg["rx_bytes"] += len(message)
-                    # Decode µ-law → PCM
-                    pcm_data = ulaw_to_pcm16_buf(message)
-                    samples = struct.unpack('<{}h'.format(len(pcm_data) // 2), pcm_data)
+                    # Raw PCM16 from ESP32
+                    pcm_data = message
+                    samples = struct.unpack("<{}h".format(len(pcm_data) // 2), pcm_data)
                     peak = max(abs(s) for s in samples) if samples else 0
                     if peak > dbg["rx_peak"]:
                         dbg["rx_peak"] = peak
@@ -213,8 +176,8 @@ async def handler(websocket):
         SILENT_THRESHOLD = 2000  # peak value below which we consider ESP32 silent
         while not stop_event.is_set():
             await asyncio.sleep(1.0)
-            rx   = dbg["rx_packets"]
-            bps  = dbg["rx_bytes"]
+            rx = dbg["rx_packets"]
+            bps = dbg["rx_bytes"]
             peak = dbg["rx_peak"]
             drop = dbg["drops"]
             undr = dbg["underruns"]
@@ -232,7 +195,7 @@ async def handler(websocket):
                 print("🔇  ESP32 went silent")
 
             bar = "█" * min(20, peak // 1638)  # 1638 per block = 32768/20
-            q   = len(spk_queue)
+            q = len(spk_queue)
             warn_drop = f"  ⚠ DROPS:{drop}" if drop else ""
             warn_undr = f"  ⚠ UNDERRUNS:{undr}" if undr > 5 else ""
             warn_supp = f"  (mic gated {supp}x)" if supp else ""

@@ -3,6 +3,10 @@ import { supabase, liveConversationSessions } from "./config.js";
 import { getUTC8Time, uploadToR2, convertPCM16ToWAV } from "./utils.js";
 import { saveMessage, updateConversationAudio } from "./db.js";
 import { ASSISTANT_PROMPT } from "./prompt.js";
+import {
+  forwardOperatorAudioToEsp32,
+  isEsp32SessionLive,
+} from "./esp32Gateway.js";
 
 // Set MODAL_AGENT_WS_URL in .env to use the Modal speech agent.
 // Falls back to OpenAI Realtime if unset.
@@ -463,6 +467,7 @@ export function setupSocket(io) {
           activeConversationId = dbData[0].id;
           socket.join(activeConversationId);
           liveConversationSessions.set(activeConversationId, {
+            source: "openai",
             callerSocketId: socket.id,
             operatorSocketId: null,
             takeoverActive: false,
@@ -777,9 +782,20 @@ export function setupSocket(io) {
       }
 
       const session = liveConversationSessions.get(conversationId);
-      if (!session?.callerSocketId) {
+      const hasSocketCaller = !!session?.callerSocketId;
+      const hasEsp32Session = !!(
+        session?.source === "esp32" && session?.esp32Socket
+      );
+      const hasEsp32Caller = isEsp32SessionLive(session);
+      if (!session || (!hasSocketCaller && !hasEsp32Session)) {
         socket.emit("operator_takeover_error", "This call is no longer live.");
         return;
+      }
+
+      if (hasEsp32Session && !hasEsp32Caller) {
+        console.warn(
+          `⚠ [Socket ${socket.id}] ESP32 session ${conversationId} is not OPEN yet; allowing takeover and waiting for reconnect.`,
+        );
       }
 
       if (session.operatorSocketId && session.operatorSocketId !== socket.id) {
@@ -817,10 +833,12 @@ export function setupSocket(io) {
         conversationId,
         operatorSocketId: socket.id,
       });
-      io.to(session.callerSocketId).emit(
-        "status_update",
-        "Operator joined the call",
-      );
+      if (session.callerSocketId) {
+        io.to(session.callerSocketId).emit(
+          "status_update",
+          "Operator joined the call",
+        );
+      }
     });
 
     socket.on("operator_audio", (payload) => {
@@ -828,12 +846,16 @@ export function setupSocket(io) {
       if (!conversationId || !audio) return;
 
       const session = liveConversationSessions.get(conversationId);
-      if (!session?.callerSocketId) return;
+      if (!session) return;
       if (!session.takeoverActive || session.operatorSocketId !== socket.id)
         return;
 
       const buf = Buffer.from(audio);
-      io.to(session.callerSocketId).emit("server_audio", buf);
+      if (isEsp32SessionLive(session)) {
+        forwardOperatorAudioToEsp32(session, buf);
+      } else if (session.callerSocketId) {
+        io.to(session.callerSocketId).emit("server_audio", buf);
+      }
       socket.to(conversationId).emit("conversation_audio", "agent", buf);
     });
 

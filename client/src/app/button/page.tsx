@@ -272,89 +272,13 @@ function ButtonPageContent() {
   }, [stopConversation]);
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900 lg:h-screen lg:overflow-hidden">
-      <div className="grid min-h-screen grid-cols-1 lg:h-full lg:min-h-0 lg:grid-cols-[1.25fr_0.75fr]">
-        <section className="flex flex-col border-b border-slate-200 lg:min-h-0 lg:border-r lg:border-b-0">
-          <div className="border-b border-slate-200 px-6 py-5">
-            <p className="text-xs uppercase tracking-[0.2em] text-red-500">
-              Personal Alert Button
-            </p>
-            <h1 className="mt-2 text-3xl font-semibold text-slate-900">
-              Live Emergency Conversation
-            </h1>
-            <p className="mt-2 text-sm text-slate-500">
-              Voice conversation appears here after the red button is pressed.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3 border-b border-slate-200 px-6 py-4 text-sm">
-            <div
-              className={`h-2.5 w-2.5 rounded-full ${
-                isConnected
-                  ? "bg-green-500"
-                  : isConnecting
-                    ? "bg-yellow-500"
-                    : "bg-slate-300"
-              }`}
-            />
-            <span className="text-slate-700">{status}</span>
-          </div>
-
-          <div className="flex-1 min-h-0 space-y-4 overflow-y-auto px-6 py-6">
-            {messages.map((message) => {
-              const isUser = message.role === "user";
-              const isAgent = message.role === "agent";
-
-              return (
-                <div
-                  key={message.id}
-                  className={`max-w-[85%] rounded px-4 py-3 text-sm leading-6 ${
-                    isUser
-                      ? "ml-auto bg-slate-900 text-white"
-                      : isUser
-                        ? "bg-slate-100 text-slate-900 border border-slate-200"
-                        : "bg-white text-slate-600 border border-slate-200"
-                  }`}
-                >
-                  <div
-                    className={`mb-1 text-xs font-medium uppercase tracking-wide ${
-                      isUser ? "text-slate-400" : "text-slate-400"
-                    }`}
-                  >
-                    {isUser ? "User" : isAgent ? "AI Agent" : "System"}
-                  </div>
-                  <div>{message.text}</div>
-                </div>
-              );
-            })}
-
-            {error && (
-              <div className="flex items-start gap-3 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                <AlertCircle className="mt-0.5 size-4 shrink-0" />
-                <div>{error}</div>
-              </div>
-            )}
-          </div>
-        </section>
-
-        <aside className="flex flex-col items-center justify-center gap-8 px-6 py-10 bg-white lg:min-h-0">
-          <div className="text-center">
-            <p className="text-sm uppercase tracking-[0.24em] text-slate-400">
-              Emergency Trigger
-            </p>
-            <h2 className="mt-2 text-2xl font-semibold text-slate-900">
-              Press to start voice help
-            </h2>
-            <p className="mt-2 max-w-sm text-sm text-slate-500">
-              The button starts a live voice session with the AI emergency
-              assistant.
-            </p>
-          </div>
-
+    <main className="flex h-screen min-h-0 flex-col bg-slate-50 text-slate-900">
+      <section className="flex flex-1 min-h-0 items-center justify-center px-6">
+        <div className="flex flex-col items-center gap-4">
           <Button
             onClick={isConnected ? stopConversation : startConversation}
             disabled={isConnecting || (!isConnected && !pabId)}
-            className="h-44 w-44 rounded-full border-0 bg-red-600 text-lg font-semibold text-white shadow-[0_0_80px_rgba(239,68,68,0.22)] transition hover:bg-red-500 focus-visible:ring-red-400/50 disabled:opacity-70"
+            className="h-44 w-44 rounded-full border-0 bg-red-600 text-lg font-semibold text-white shadow-[0_0_90px_rgba(239,68,68,0.25)] transition hover:bg-red-500 focus-visible:ring-red-400/50 disabled:opacity-70"
           >
             {isConnecting ? (
               <span className="flex flex-col items-center gap-2">
@@ -373,27 +297,63 @@ function ButtonPageContent() {
             )}
           </Button>
 
-          <div className="max-w-sm rounded border border-slate-200 bg-white p-4 text-sm text-slate-700">
-            <div className="mb-2 font-medium text-slate-900">
-              System Architecture
-            </div>
-            <p className="mb-2">
-              This version securely proxies bidirectional audio via WebSockets
-              on the Node.js backend. The frontend captures audio, streams to
-              the backend, and the backend communicates with OpenAI.
+          <div className="flex items-center gap-2 text-sm text-slate-600">
+            <span
+              className={`h-2 w-2 rounded-full ${
+                isConnected
+                  ? "bg-green-500"
+                  : isConnecting
+                    ? "bg-yellow-500"
+                    : "bg-slate-300"
+              }`}
+            />
+            <span>{status}</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="h-[35vh] min-h-[220px] border-t border-slate-200 bg-white/95 backdrop-blur-sm">
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Conversation
             </p>
-            {pabId ? (
-              <p className="font-semibold text-blue-600 break-all">
-                Active PAB ID: {pabId}
-              </p>
-            ) : (
-              <p className="text-slate-400">
-                No specific PAB specified for this test.
-              </p>
+          </div>
+          <div className="flex-1 min-h-0 space-y-3 overflow-y-auto px-4 py-3">
+            {messages
+              .filter((message) => message.role !== "system")
+              .map((message) => {
+              const isUser = message.role === "user";
+              const isAgent = message.role === "agent";
+
+              return (
+                <div
+                  key={message.id}
+                  className={`max-w-[90%] rounded px-3 py-2 text-sm leading-6 ${
+                    isUser
+                      ? "ml-auto bg-slate-900 text-white"
+                      : isAgent
+                        ? "border border-slate-200 bg-slate-100 text-slate-900"
+                        : "border border-slate-200 bg-white text-slate-600"
+                  }`}
+                >
+                  <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                    {isUser ? "User" : isAgent ? "AI Agent" : "System"}
+                  </div>
+                  <div>{message.text}</div>
+                </div>
+              );
+            })}
+
+            {error && (
+              <div className="flex items-start gap-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                <div>{error}</div>
+              </div>
             )}
           </div>
-        </aside>
-      </div>
+        </div>
+      </section>
     </main>
   );
 }
