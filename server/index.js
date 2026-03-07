@@ -127,6 +127,7 @@ async function saveMessage(conversationId, author, text) {
     // Supabase returns an array for select()
     const savedId = data?.[0]?.id || "unknown";
     console.log(`✅ Saved ${author} message to Supabase DB ID: ${savedId}`);
+    io.emit('dashboard_update');
   }
 }
 
@@ -146,6 +147,7 @@ async function updateConversationAudio(conversationId, fileName) {
     console.log(
       `✅ Updated conversation ${conversationId} audio_url: ${fileName}`,
     );
+    io.emit('dashboard_update');
   }
 }
 
@@ -184,6 +186,7 @@ app.post("/api/conversations", async (req, res) => {
     .select();
 
   if (error) return res.status(400).json({ error: error.message });
+  io.emit('dashboard_update');
   res.json(data[0]);
 });
 
@@ -209,6 +212,7 @@ app.patch("/api/conversations/:id", async (req, res) => {
     .select();
 
   if (error) return res.status(400).json({ error: error.message });
+  io.emit('dashboard_update');
   res.json(data[0]);
 });
 
@@ -232,6 +236,7 @@ app.post("/api/messages", async (req, res) => {
     .select();
 
   if (error) return res.status(400).json({ error: error.message });
+  io.emit('dashboard_update');
   res.json(data[0]);
 });
 
@@ -502,11 +507,12 @@ io.on("connection", (socket) => {
           .from("conversations")
           .update({ end: getUTC8Time() })
           .eq("id", activeConversationId)
-          .then(() =>
+          .then(() => {
             console.log(
               `[Socket ${socket.id}] Logged end time for conversation ${activeConversationId}`,
-            ),
-          )
+            );
+            io.emit('dashboard_update');
+          })
           .catch((err) => console.error("Error logging end time:", err));
 
         // Aggregate and upload the complete conversation audio recording
