@@ -7,6 +7,7 @@ import { MapPin, Phone, AlertTriangle, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConversationsView, type UIConversation } from "./conversations-view";
 import { SingaporeMap, type PABMarker } from "@/components/map/singapore-map";
+import { resolveSocketServerUrl } from "@/lib/socket";
 
 interface Props {
   conversations: UIConversation[];
@@ -38,7 +39,7 @@ export function DashboardShell({
 
   useEffect(() => {
     // Connect to the Node backend listening on port 3001
-    const socket = socketIO("http://localhost:3001");
+    const socket = socketIO(resolveSocketServerUrl());
 
     socket.on("dashboard_update", () => {
       console.log("Dashboard update received, refreshing data...");
