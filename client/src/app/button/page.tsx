@@ -12,6 +12,16 @@ type ChatMessage = {
   text: string;
 };
 
+const SOCKET_SERVER_URL =
+  process.env.NEXT_PUBLIC_SOCKET_SERVER_URL;
+
+function resolveSocketServerUrl() {
+  if (SOCKET_SERVER_URL) return SOCKET_SERVER_URL;
+  if (typeof window === "undefined") return "http://localhost:3001";
+  const protocol = window.location.protocol === "https:" ? "https" : "http";
+  return `${protocol}://${window.location.hostname}:3001`;
+}
+
 function float32ToInt16(float32: Float32Array): Int16Array {
   const int16 = new Int16Array(float32.length);
   for (let i = 0; i < float32.length; i++) {
@@ -212,7 +222,7 @@ export default function Page() {
     nextPlaybackTimeRef.current = playbackAudioContextRef.current.currentTime;
 
     // Connect to Node.js backend
-    const socket = io("http://localhost:3001");
+    const socket = io(resolveSocketServerUrl());
     socketRef.current = socket;
 
     socket.on("connect", () => {

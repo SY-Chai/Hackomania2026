@@ -20,6 +20,12 @@ const io = new Server(server, {
   },
 });
 
+// Tracks currently live calls by conversation ID.
+// callerSocketId: the user's call socket
+// operatorSocketId: operator socket that took over the call (if any)
+// takeoverActive: whether AI responses are paused in favor of operator audio
+const liveConversationSessions = new Map();
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -334,6 +340,11 @@ io.on("connection", (socket) => {
       } else if (data && data.length > 0) {
         activeConversationId = data[0].id;
         socket.join(activeConversationId);
+        liveConversationSessions.set(activeConversationId, {
+          callerSocketId: socket.id,
+          operatorSocketId: null,
+          takeoverActive: false,
+        });
         console.log(
           `✅ [Socket ${socket.id}] Conversation created DB ID: ${activeConversationId}`,
         );
@@ -387,6 +398,14 @@ io.on("connection", (socket) => {
           case "response.audio.delta":
             // Base64 decode to PCM16 ArrayBuffer
             if (event.delta) {
+              const isOperatorTakeover = !!(
+                activeConversationId &&
+                liveConversationSessions.get(activeConversationId)?.takeoverActive
+              );
+              if (isOperatorTakeover) {
+                break;
+              }
+
               const buffer = Buffer.from(event.delta, "base64");
               assistantAudioBuffer.push(buffer);
               socket.emit("server_audio", buffer);
@@ -474,6 +493,11 @@ io.on("connection", (socket) => {
 
       // Add actual end time to the conversation when socket closes
       if (activeConversationId) {
+        io.to(activeConversationId).emit("operator_takeover_stopped", {
+          conversationId: activeConversationId,
+        });
+        liveConversationSessions.delete(activeConversationId);
+
         supabase
           .from("conversations")
           .update({ end: getUTC8Time() })
@@ -514,16 +538,27 @@ io.on("connection", (socket) => {
   // 3. Receive audio chunks from the frontend client
   socket.on("client_audio", (pcm16Buffer) => {
     if (openAiWs && openAiWs.readyState === WebSocket.OPEN) {
+      const session = activeConversationId
+        ? liveConversationSessions.get(activeConversationId)
+        : null;
+      const isOperatorTakeover = !!(session?.takeoverActive && session?.operatorSocketId);
+
       // Encode ArrayBuffer to base64
       const buf = Buffer.from(pcm16Buffer);
+      if (isOperatorTakeover) {
+        if (activeConversationId) {
+          socket.to(activeConversationId).emit("conversation_audio", "user", buf);
+        }
+        return;
+      }
+
       const base64Audio = buf.toString("base64");
-
-      const audioEvent = {
-        type: "input_audio_buffer.append",
-        audio: base64Audio,
-      };
-
-      openAiWs.send(JSON.stringify(audioEvent));
+      openAiWs.send(
+        JSON.stringify({
+          type: "input_audio_buffer.append",
+          audio: base64Audio,
+        }),
+      );
 
       // Stream buffering
       if (isRecordingUser) {
@@ -546,6 +581,85 @@ io.on("connection", (socket) => {
       openAiWs.close();
       openAiWs = null;
     }
+  });
+
+  socket.on("operator_takeover_start", async (conversationId) => {
+    if (!conversationId) {
+      socket.emit("operator_takeover_error", "Conversation ID is required.");
+      return;
+    }
+
+    const session = liveConversationSessions.get(conversationId);
+    if (!session?.callerSocketId) {
+      socket.emit("operator_takeover_error", "This call is no longer live.");
+      return;
+    }
+
+    if (session.operatorSocketId && session.operatorSocketId !== socket.id) {
+      socket.emit(
+        "operator_takeover_error",
+        "Another operator is already handling this call.",
+      );
+      return;
+    }
+
+    session.operatorSocketId = socket.id;
+    session.takeoverActive = true;
+    liveConversationSessions.set(conversationId, session);
+    socket.join(conversationId);
+
+    if (supabase) {
+      const { error } = await supabase
+        .from("conversations")
+        .update({ triage: "operator" })
+        .eq("id", conversationId);
+
+      if (error) {
+        console.error(
+          `❌ Failed to update triage=operator for ${conversationId}:`,
+          error,
+        );
+      } else {
+        console.log(`✅ Conversation ${conversationId} triage updated to operator`);
+      }
+    }
+
+    io.to(conversationId).emit("operator_takeover_started", {
+      conversationId,
+      operatorSocketId: socket.id,
+    });
+    io.to(session.callerSocketId).emit("status_update", "Operator joined the call");
+  });
+
+  socket.on("operator_audio", (payload) => {
+    const { conversationId, audio } = payload || {};
+    if (!conversationId || !audio) return;
+
+    const session = liveConversationSessions.get(conversationId);
+    if (!session?.callerSocketId) return;
+    if (!session.takeoverActive || session.operatorSocketId !== socket.id) return;
+
+    const buf = Buffer.from(audio);
+    io.to(session.callerSocketId).emit("server_audio", buf);
+    socket.to(conversationId).emit("conversation_audio", "agent", buf);
+  });
+
+  socket.on("operator_takeover_stop", (conversationId) => {
+    if (!conversationId) return;
+
+    const session = liveConversationSessions.get(conversationId);
+    if (!session) return;
+
+    const isOperator = session.operatorSocketId === socket.id;
+    const isCaller = session.callerSocketId === socket.id;
+    if (!isOperator && !isCaller) return;
+
+    session.operatorSocketId = null;
+    session.takeoverActive = false;
+    liveConversationSessions.set(conversationId, session);
+
+    io.to(conversationId).emit("operator_takeover_stopped", { conversationId });
+    io.to(session.callerSocketId).emit("status_update", "AI assistant resumed");
   });
 
   // A user/operator joins a specific conversation room
@@ -571,6 +685,24 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
+
+    for (const [conversationId, session] of liveConversationSessions.entries()) {
+      if (session.operatorSocketId === socket.id) {
+        session.operatorSocketId = null;
+        session.takeoverActive = false;
+        liveConversationSessions.set(conversationId, session);
+        io.to(conversationId).emit("operator_takeover_stopped", { conversationId });
+        io.to(session.callerSocketId).emit("status_update", "AI assistant resumed");
+      }
+    }
+
+    if (activeConversationId) {
+      const session = liveConversationSessions.get(activeConversationId);
+      if (session?.callerSocketId === socket.id) {
+        liveConversationSessions.delete(activeConversationId);
+      }
+    }
+
     if (openAiWs) {
       openAiWs.close();
       openAiWs = null;
@@ -579,6 +711,7 @@ io.on("connection", (socket) => {
 });
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+const HOST = process.env.HOST || "0.0.0.0";
+server.listen(PORT, HOST, () => {
+  console.log(`Server running on http://${HOST}:${PORT}`);
 });

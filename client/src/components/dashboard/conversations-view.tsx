@@ -18,6 +18,8 @@ import {
   Headphones,
   Loader2,
   Volume2,
+  Mic,
+  PhoneOff,
 } from "lucide-react";
 
 // --- Types derived from Supabase data ---
@@ -92,9 +94,20 @@ function getInitials(name: string) {
 
 type FilterTab = "all" | "triage" | "diagnosis";
 type LiveSpeaker = "user" | "agent";
+type TakeoverEvent = {
+  conversationId: string;
+  operatorSocketId?: string;
+};
 
 const SOCKET_SERVER_URL =
-  process.env.NEXT_PUBLIC_SOCKET_SERVER_URL ?? "http://localhost:3001";
+  process.env.NEXT_PUBLIC_SOCKET_SERVER_URL;
+
+function resolveSocketServerUrl() {
+  if (SOCKET_SERVER_URL) return SOCKET_SERVER_URL;
+  if (typeof window === "undefined") return "http://localhost:3001";
+  const protocol = window.location.protocol === "https:" ? "https" : "http";
+  return `${protocol}://${window.location.hostname}:3001`;
+}
 
 function toPcm16(chunk: ArrayBuffer | Uint8Array) {
   if (chunk instanceof ArrayBuffer) {
@@ -105,6 +118,45 @@ function toPcm16(chunk: ArrayBuffer | Uint8Array) {
     chunk.byteOffset,
     Math.floor(chunk.byteLength / 2),
   );
+}
+
+function float32ToInt16(float32: Float32Array): Int16Array {
+  const int16 = new Int16Array(float32.length);
+  for (let i = 0; i < float32.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32[i]));
+    int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return int16;
+}
+
+function resampleTo24k(input: Float32Array, inputSampleRate: number): Int16Array {
+  if (inputSampleRate === 24000) {
+    return float32ToInt16(input);
+  }
+
+  const ratio = inputSampleRate / 24000;
+  const newLength = Math.round(input.length / ratio);
+  const result = new Float32Array(newLength);
+
+  let offsetResult = 0;
+  let offsetBuffer = 0;
+
+  while (offsetResult < result.length) {
+    const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+    let accum = 0;
+    let count = 0;
+
+    for (let i = offsetBuffer; i < nextOffsetBuffer && i < input.length; i++) {
+      accum += input[i];
+      count++;
+    }
+
+    result[offsetResult] = count > 0 ? accum / count : 0;
+    offsetResult++;
+    offsetBuffer = nextOffsetBuffer;
+  }
+
+  return float32ToInt16(result);
 }
 
 interface Props {
@@ -122,14 +174,89 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const [liveAudioStatus, setLiveAudioStatus] = useState("Live audio off");
   const [liveAudioError, setLiveAudioError] = useState<string | null>(null);
   const [lastSpeaker, setLastSpeaker] = useState<LiveSpeaker | null>(null);
+  const [takeoverConversationId, setTakeoverConversationId] = useState<string | null>(null);
+  const [pendingTakeoverConversationId, setPendingTakeoverConversationId] = useState<string | null>(null);
+  const [takeoverError, setTakeoverError] = useState<string | null>(null);
 
   const listenerSocketRef = useRef<Socket | null>(null);
   const playbackAudioContextRef = useRef<AudioContext | null>(null);
   const nextPlaybackTimeRef = useRef(0);
+  const joinedConversationIdRef = useRef<string | null>(null);
+  const pendingTakeoverConversationIdRef = useRef<string | null>(null);
+  const inputAudioContextRef = useRef<AudioContext | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
   const selected =
-    conversations.find((conv) => conv.id === selectedId) ??
-    conversations[0] ??
-    null;
+    conversations.find((conv) => conv.id === selectedId) ?? conversations[0] ?? null;
+
+  const stopOperatorMicrophoneCapture = useCallback(() => {
+    try {
+      processorRef.current?.disconnect();
+      sourceRef.current?.disconnect();
+      processorRef.current = null;
+      sourceRef.current = null;
+    } catch {
+      // no-op
+    }
+
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+
+    if (inputAudioContextRef.current) {
+      inputAudioContextRef.current.close().catch(() => undefined);
+      inputAudioContextRef.current = null;
+    }
+  }, []);
+
+  const startOperatorMicrophoneCapture = useCallback(
+    async (socket: Socket, conversationId: string) => {
+      stopOperatorMicrophoneCapture();
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            noiseSuppression: true,
+            echoCancellation: true,
+            autoGainControl: true,
+            channelCount: 1,
+          },
+        });
+        mediaStreamRef.current = stream;
+
+        const audioContext = new AudioContext();
+        inputAudioContextRef.current = audioContext;
+
+        const source = audioContext.createMediaStreamSource(stream);
+        sourceRef.current = source;
+
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        processorRef.current = processor;
+
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+
+        processor.onaudioprocess = (event) => {
+          const input = event.inputBuffer.getChannelData(0);
+          const copied = new Float32Array(input);
+          const pcm16 = resampleTo24k(copied, audioContext.sampleRate);
+
+          socket.emit("operator_audio", {
+            conversationId,
+            audio: pcm16.buffer,
+          });
+        };
+      } catch {
+        setTakeoverError("Microphone access is required for operator takeover.");
+        pendingTakeoverConversationIdRef.current = null;
+        setPendingTakeoverConversationId(null);
+        setTakeoverConversationId(null);
+        socket.emit("operator_takeover_stop", conversationId);
+      }
+    },
+    [stopOperatorMicrophoneCapture],
+  );
 
   const schedulePcm16Playback = useCallback((pcmChunk: Int16Array) => {
     const ctx = playbackAudioContextRef.current;
@@ -156,7 +283,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   useEffect(() => {
     if (!listenTargetId) return;
 
-    const socket = io(SOCKET_SERVER_URL);
+    const socket = io(resolveSocketServerUrl());
     listenerSocketRef.current = socket;
 
     const audioContext = new AudioContext({ sampleRate: 24000 });
@@ -181,8 +308,12 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
     socket.on("conversation_joined", (joinedId: string) => {
       if (isDisposed || joinedId !== listenTargetId) return;
+      joinedConversationIdRef.current = joinedId;
       setIsAudioConnecting(false);
       setLiveAudioStatus("Listening live");
+      if (pendingTakeoverConversationIdRef.current === joinedId) {
+        socket.emit("operator_takeover_start", joinedId);
+      }
     });
 
     socket.on(
@@ -201,38 +332,89 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
       },
     );
 
+    socket.on("operator_takeover_started", (event: TakeoverEvent) => {
+      if (isDisposed || event?.conversationId !== listenTargetId) return;
+      pendingTakeoverConversationIdRef.current = null;
+      setPendingTakeoverConversationId(null);
+      setTakeoverConversationId(event.conversationId);
+      setTakeoverError(null);
+      setLiveAudioStatus("Operator call active");
+      if (event.operatorSocketId === socket.id) {
+        startOperatorMicrophoneCapture(socket, event.conversationId);
+      }
+    });
+
+    socket.on("operator_takeover_stopped", (event: TakeoverEvent) => {
+      if (isDisposed || event?.conversationId !== listenTargetId) return;
+      stopOperatorMicrophoneCapture();
+      pendingTakeoverConversationIdRef.current = null;
+      setPendingTakeoverConversationId(null);
+      setTakeoverConversationId(null);
+      setLiveAudioStatus("Listening live");
+    });
+
+    socket.on("operator_takeover_error", (message: string) => {
+      if (isDisposed) return;
+      stopOperatorMicrophoneCapture();
+      pendingTakeoverConversationIdRef.current = null;
+      setPendingTakeoverConversationId(null);
+      setTakeoverConversationId(null);
+      setTakeoverError(message || "Failed to start operator takeover.");
+      setLiveAudioStatus("Listening live");
+    });
+
     socket.on("connect_error", () => {
       if (isDisposed) return;
+      stopOperatorMicrophoneCapture();
       setLiveAudioError("Failed to connect to live audio stream.");
       setLiveAudioStatus("Live audio unavailable");
       setIsAudioConnecting(false);
+      pendingTakeoverConversationIdRef.current = null;
+      setPendingTakeoverConversationId(null);
+      setTakeoverConversationId(null);
       setListenTargetId(null);
     });
 
     socket.on("disconnect", () => {
       if (isDisposed) return;
+      stopOperatorMicrophoneCapture();
       setLiveAudioStatus("Live audio disconnected");
       setIsAudioConnecting(false);
+      pendingTakeoverConversationIdRef.current = null;
+      setPendingTakeoverConversationId(null);
+      setTakeoverConversationId(null);
       setListenTargetId(null);
     });
 
     return () => {
       isDisposed = true;
+      socket.emit("operator_takeover_stop", listenTargetId);
       socket.emit("leave_conversation", listenTargetId);
       socket.disconnect();
       if (listenerSocketRef.current === socket) {
         listenerSocketRef.current = null;
       }
+      joinedConversationIdRef.current = null;
+      stopOperatorMicrophoneCapture();
 
       if (playbackAudioContextRef.current === audioContext) {
         audioContext.close().catch(() => undefined);
         playbackAudioContextRef.current = null;
       }
       nextPlaybackTimeRef.current = 0;
+      pendingTakeoverConversationIdRef.current = null;
       setIsAudioConnecting(false);
       setLastSpeaker(null);
+      setPendingTakeoverConversationId(null);
+      setTakeoverConversationId(null);
+      setTakeoverError(null);
     };
-  }, [listenTargetId, schedulePcm16Playback]);
+  }, [
+    listenTargetId,
+    schedulePcm16Playback,
+    startOperatorMicrophoneCapture,
+    stopOperatorMicrophoneCapture,
+  ]);
 
   const filtered =
     filter === "all"
@@ -266,6 +448,10 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
       </div>
     );
   }
+
+  const isListeningSelected = listenTargetId === selected.id;
+  const isTakeoverSelected = takeoverConversationId === selected.id;
+  const isTakeoverPending = pendingTakeoverConversationId === selected.id;
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
@@ -328,9 +514,15 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                   onClick={() => {
                     setSelectedId(conv.id);
                     if (listenTargetId && listenTargetId !== conv.id) {
+                      listenerSocketRef.current?.emit("operator_takeover_stop", listenTargetId);
+                      stopOperatorMicrophoneCapture();
                       setLiveAudioStatus("Live audio off");
                       setLiveAudioError(null);
                       setIsAudioConnecting(false);
+                      pendingTakeoverConversationIdRef.current = null;
+                      setPendingTakeoverConversationId(null);
+                      setTakeoverConversationId(null);
+                      setTakeoverError(null);
                       setListenTargetId(null);
                     }
                   }}
@@ -411,12 +603,19 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               variant={
                 listenTargetId === selected.id ? "destructive" : "outline"
               }
+              variant={isListeningSelected ? "destructive" : "outline"}
               size="sm"
               onClick={() => {
-                if (listenTargetId === selected.id) {
+                if (isListeningSelected) {
+                  listenerSocketRef.current?.emit("operator_takeover_stop", selected.id);
+                  stopOperatorMicrophoneCapture();
                   setLiveAudioStatus("Live audio off");
                   setLiveAudioError(null);
                   setIsAudioConnecting(false);
+                  pendingTakeoverConversationIdRef.current = null;
+                  setPendingTakeoverConversationId(null);
+                  setTakeoverConversationId(null);
+                  setTakeoverError(null);
                   setListenTargetId(null);
                   return;
                 }
@@ -426,14 +625,14 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 setLiveAudioStatus("Connecting to live audio...");
                 setListenTargetId(selected.id);
               }}
-              disabled={isAudioConnecting && listenTargetId === selected.id}
+              disabled={isAudioConnecting && isListeningSelected}
             >
-              {isAudioConnecting && listenTargetId === selected.id ? (
+              {isAudioConnecting && isListeningSelected ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   Connecting
                 </>
-              ) : listenTargetId === selected.id ? (
+              ) : isListeningSelected ? (
                 <>
                   <Headphones className="w-3.5 h-3.5" />
                   Stop listening
@@ -442,6 +641,59 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 <>
                   <Headphones className="w-3.5 h-3.5" />
                   Listen live
+                </>
+              )}
+            </Button>
+            <Button
+              variant={isTakeoverSelected ? "destructive" : "default"}
+              size="sm"
+              onClick={() => {
+                if (isTakeoverSelected || isTakeoverPending) {
+                  listenerSocketRef.current?.emit("operator_takeover_stop", selected.id);
+                  stopOperatorMicrophoneCapture();
+                  pendingTakeoverConversationIdRef.current = null;
+                  setPendingTakeoverConversationId(null);
+                  setTakeoverConversationId(null);
+                  setTakeoverError(null);
+                  setLiveAudioStatus(isListeningSelected ? "Listening live" : "Live audio off");
+                  return;
+                }
+
+                setLiveAudioError(null);
+                setTakeoverError(null);
+                pendingTakeoverConversationIdRef.current = selected.id;
+                setPendingTakeoverConversationId(selected.id);
+                setLiveAudioStatus("Connecting operator call...");
+
+                const socket = listenerSocketRef.current;
+                if (
+                  isListeningSelected &&
+                  socket?.connected &&
+                  joinedConversationIdRef.current === selected.id
+                ) {
+                  socket.emit("operator_takeover_start", selected.id);
+                  return;
+                }
+
+                setIsAudioConnecting(true);
+                setListenTargetId(selected.id);
+              }}
+              disabled={isAudioConnecting && !isListeningSelected}
+            >
+              {isTakeoverPending ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Taking over
+                </>
+              ) : isTakeoverSelected ? (
+                <>
+                  <PhoneOff className="w-3.5 h-3.5" />
+                  End call
+                </>
+              ) : (
+                <>
+                  <Mic className="w-3.5 h-3.5" />
+                  Take over
                 </>
               )}
             </Button>
@@ -477,11 +729,20 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
           <div
             className={cn(
               "flex items-center gap-1.5 text-xs",
-              listenTargetId ? "text-emerald-600" : "text-slate-500",
+              takeoverConversationId
+                ? "text-red-600"
+                : listenTargetId
+                  ? "text-emerald-600"
+                  : "text-slate-500",
             )}
           >
             <Volume2 className="w-3 h-3" />
             {liveAudioStatus}
+            {takeoverConversationId && (
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-red-500">
+                Operator call
+              </span>
+            )}
             {lastSpeaker && (
               <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                 {lastSpeaker === "user" ? "Senior" : "Agent"}
@@ -490,6 +751,9 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
           </div>
           {liveAudioError && (
             <span className="text-xs text-red-600">{liveAudioError}</span>
+          )}
+          {takeoverError && (
+            <span className="text-xs text-red-600">{takeoverError}</span>
           )}
         </div>
 
