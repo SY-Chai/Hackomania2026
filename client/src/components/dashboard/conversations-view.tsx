@@ -14,6 +14,11 @@ import {
   sortMessages,
 } from "@/lib/dashboard-utils";
 import { toPcm16, resampleTo24k, schedulePcm16Playback } from "@/lib/audio";
+
+const CLOSED_STATUSES = new Set(["resolved", "closed", "completed", "done"]);
+function isConversationOngoing(classification: string | null): boolean {
+  return !classification || !CLOSED_STATUSES.has(classification.toLowerCase());
+}
 import {
   MessageSquare,
   User,
@@ -599,6 +604,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const isListeningSelected = listenTargetId === selected.id;
   const isTakeoverSelected = takeoverConversationId === selected.id;
   const isTakeoverPending = pendingTakeoverConversationId === selected.id;
+  const isSelectedOngoing = isConversationOngoing(selected.classification);
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
@@ -790,113 +796,117 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 </span>
               )}
             </div>
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              <Button
-                className="min-w-35 justify-center"
-                variant={isListeningSelected ? "destructive" : "outline"}
-                size="sm"
-                onClick={() => {
-                  if (isListeningSelected) {
-                    listenerSocketRef.current?.emit(
-                      "operator_takeover_stop",
-                      selected.id,
-                    );
-                    stopOperatorMicrophoneCapture();
-                    setLiveAudioStatus("Live audio off");
+            {isSelectedOngoing && (
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <Button
+                  className="min-w-35 justify-center"
+                  variant={isListeningSelected ? "destructive" : "outline"}
+                  size="sm"
+                  onClick={() => {
+                    if (isListeningSelected) {
+                      listenerSocketRef.current?.emit(
+                        "operator_takeover_stop",
+                        selected.id,
+                      );
+                      stopOperatorMicrophoneCapture();
+                      setLiveAudioStatus("Live audio off");
+                      setLiveAudioError(null);
+                      setIsAudioConnecting(false);
+                      pendingTakeoverConversationIdRef.current = null;
+                      setPendingTakeoverConversationId(null);
+                      setTakeoverConversationId(null);
+                      setTakeoverError(null);
+                      setListenTargetId(null);
+                      return;
+                    }
                     setLiveAudioError(null);
-                    setIsAudioConnecting(false);
-                    pendingTakeoverConversationIdRef.current = null;
-                    setPendingTakeoverConversationId(null);
-                    setTakeoverConversationId(null);
+                    setLastSpeaker(null);
+                    setIsAudioConnecting(true);
+                    setLiveAudioStatus("Connecting to live audio...");
+                    setListenTargetId(selected.id);
+                  }}
+                  disabled={isAudioConnecting && isListeningSelected}
+                >
+                  {isAudioConnecting && isListeningSelected ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Connecting
+                    </>
+                  ) : isListeningSelected ? (
+                    <>
+                      <Headphones className="w-3.5 h-3.5" />
+                      Stop listening
+                    </>
+                  ) : (
+                    <>
+                      <Headphones className="w-3.5 h-3.5" />
+                      Listen live
+                    </>
+                  )}
+                </Button>
+                <Button
+                  className="min-w-35 justify-center"
+                  variant={isTakeoverSelected ? "destructive" : "default"}
+                  size="sm"
+                  onClick={() => {
+                    if (isTakeoverSelected || isTakeoverPending) {
+                      listenerSocketRef.current?.emit(
+                        "operator_takeover_stop",
+                        selected.id,
+                      );
+                      stopOperatorMicrophoneCapture();
+                      pendingTakeoverConversationIdRef.current = null;
+                      setPendingTakeoverConversationId(null);
+                      setTakeoverConversationId(null);
+                      setTakeoverError(null);
+                      setLiveAudioStatus(
+                        isListeningSelected
+                          ? "Listening live"
+                          : "Live audio off",
+                      );
+                      return;
+                    }
+
+                    setLiveAudioError(null);
                     setTakeoverError(null);
-                    setListenTargetId(null);
-                    return;
-                  }
-                  setLiveAudioError(null);
-                  setLastSpeaker(null);
-                  setIsAudioConnecting(true);
-                  setLiveAudioStatus("Connecting to live audio...");
-                  setListenTargetId(selected.id);
-                }}
-                disabled={isAudioConnecting && isListeningSelected}
-              >
-                {isAudioConnecting && isListeningSelected ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Connecting
-                  </>
-                ) : isListeningSelected ? (
-                  <>
-                    <Headphones className="w-3.5 h-3.5" />
-                    Stop listening
-                  </>
-                ) : (
-                  <>
-                    <Headphones className="w-3.5 h-3.5" />
-                    Listen live
-                  </>
-                )}
-              </Button>
-              <Button
-                className="min-w-35 justify-center"
-                variant={isTakeoverSelected ? "destructive" : "default"}
-                size="sm"
-                onClick={() => {
-                  if (isTakeoverSelected || isTakeoverPending) {
-                    listenerSocketRef.current?.emit(
-                      "operator_takeover_stop",
-                      selected.id,
-                    );
-                    stopOperatorMicrophoneCapture();
-                    pendingTakeoverConversationIdRef.current = null;
-                    setPendingTakeoverConversationId(null);
-                    setTakeoverConversationId(null);
-                    setTakeoverError(null);
-                    setLiveAudioStatus(
-                      isListeningSelected ? "Listening live" : "Live audio off",
-                    );
-                    return;
-                  }
+                    pendingTakeoverConversationIdRef.current = selected.id;
+                    setPendingTakeoverConversationId(selected.id);
+                    setLiveAudioStatus("Connecting operator call...");
 
-                  setLiveAudioError(null);
-                  setTakeoverError(null);
-                  pendingTakeoverConversationIdRef.current = selected.id;
-                  setPendingTakeoverConversationId(selected.id);
-                  setLiveAudioStatus("Connecting operator call...");
+                    const socket = listenerSocketRef.current;
+                    if (
+                      isListeningSelected &&
+                      socket?.connected &&
+                      joinedConversationIdRef.current === selected.id
+                    ) {
+                      socket.emit("operator_takeover_start", selected.id);
+                      return;
+                    }
 
-                  const socket = listenerSocketRef.current;
-                  if (
-                    isListeningSelected &&
-                    socket?.connected &&
-                    joinedConversationIdRef.current === selected.id
-                  ) {
-                    socket.emit("operator_takeover_start", selected.id);
-                    return;
-                  }
-
-                  setIsAudioConnecting(true);
-                  setListenTargetId(selected.id);
-                }}
-                disabled={isAudioConnecting && !isListeningSelected}
-              >
-                {isTakeoverPending ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Taking over
-                  </>
-                ) : isTakeoverSelected ? (
-                  <>
-                    <PhoneOff className="w-3.5 h-3.5" />
-                    End call
-                  </>
-                ) : (
-                  <>
-                    <Mic className="w-3.5 h-3.5" />
-                    Take over
-                  </>
-                )}
-              </Button>
-            </div>
+                    setIsAudioConnecting(true);
+                    setListenTargetId(selected.id);
+                  }}
+                  disabled={isAudioConnecting && !isListeningSelected}
+                >
+                  {isTakeoverPending ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Taking over
+                    </>
+                  ) : isTakeoverSelected ? (
+                    <>
+                      <PhoneOff className="w-3.5 h-3.5" />
+                      End call
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="w-3.5 h-3.5" />
+                      Take over
+                    </>
+                  )}
+                </Button>
+              </div>
+            )}
           </div>
         </div>
 
