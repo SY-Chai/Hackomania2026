@@ -954,7 +954,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 ) : (
                   <>
                     <PhoneOff className="w-3.5 h-3.5" />
-                    End conversation
+                    Cut
                   </>
                 )}
               </Button>
