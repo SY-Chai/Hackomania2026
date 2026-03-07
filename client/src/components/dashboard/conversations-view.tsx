@@ -8,7 +8,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { resolveSocketServerUrl } from "@/lib/socket";
 import { type DBConversation, type DBMessage } from "@/lib/supabase";
-import { deriveRole, normalizePhase } from "@/lib/dashboard-utils";
+import {
+  deriveRole,
+  normalizePhase,
+  parseOperatorSummary,
+} from "@/lib/dashboard-utils";
 import { toPcm16, resampleTo24k, schedulePcm16Playback } from "@/lib/audio";
 import {
   MessageSquare,
@@ -23,6 +27,9 @@ import {
   Volume2,
   Mic,
   PhoneOff,
+  ChevronDown,
+  ChevronUp,
+  ClipboardList,
 } from "lucide-react";
 
 // --- Types derived from Supabase data ---
@@ -35,6 +42,14 @@ export interface UIMessage {
   timestamp: string;
 }
 
+export interface OperatorSummary {
+  incident_overview: string;
+  key_symptoms: string[];
+  risk_factors: string[];
+  actions_taken: string[];
+  recommended_next_step: string;
+}
+
 export interface UIConversation {
   id: string;
   pabId: string | null;
@@ -43,6 +58,7 @@ export interface UIConversation {
   severity: "urgent" | "uncertain" | "non_urgent" | null;
   severityConf: number | null;
   severityReason: string | null;
+  operatorSummary: OperatorSummary | null;
   startedAt: string | null;
   lastActivity: string | null;
   messages: UIMessage[];
@@ -124,6 +140,8 @@ type SeverityUpdateEvent = {
   severity: "urgent" | "uncertain" | "non_urgent";
   severity_conf?: number | null;
   severity_reason?: string | null;
+  operator_summary?: OperatorSummary | null;
+  summary?: string | null;
   updatedAt?: string;
 };
 
@@ -170,6 +188,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const [takeoverConversationId, setTakeoverConversationId] = useState<string | null>(null);
   const [pendingTakeoverConversationId, setPendingTakeoverConversationId] = useState<string | null>(null);
   const [takeoverError, setTakeoverError] = useState<string | null>(null);
+  const [isSummaryOpen, setIsSummaryOpen] = useState(true);
 
   const listenerSocketRef = useRef<Socket | null>(null);
   const playbackAudioContextRef = useRef<AudioContext | null>(null);
@@ -186,6 +205,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
     liveConversations.find((conv) => conv.id === selectedId) ??
     liveConversations[0] ??
     null;
+  const selectedSummary = selected?.operatorSummary ?? null;
 
   useEffect(() => {
     setPabLocation(null);
@@ -300,6 +320,11 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                   ? conv.severityConf
                   : event.severity_conf,
               severityReason: event.severity_reason ?? conv.severityReason,
+              operatorSummary:
+                event.operator_summary ??
+                (event.summary
+                  ? parseOperatorSummary(event.summary)
+                  : conv.operatorSummary),
             }
             : conv,
         ),
@@ -327,6 +352,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
             severity: c.severity,
             severityConf: c.severity_conf,
             severityReason: c.severity_reason,
+            operatorSummary: parseOperatorSummary(c.summary),
             startedAt: c.start,
             lastActivity: c.start,
             messages: [],
@@ -348,6 +374,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               severity: c.severity,
               severityConf: c.severity_conf,
               severityReason: c.severity_reason,
+              operatorSummary: parseOperatorSummary(c.summary),
             }
             : conv,
         ),
@@ -891,6 +918,59 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
         <div className="flex-1 overflow-y-auto min-h-0 px-2 py-2">
           <div className="space-y-4 max-w-3xl">
+            {selectedSummary && (
+              <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setIsSummaryOpen((prev) => !prev)}
+                  className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left"
+                >
+                  <span className="flex items-center gap-2 text-xs font-semibold text-slate-800">
+                    <ClipboardList className="w-3.5 h-3.5 text-slate-500" />
+                    Live Operator Summary
+                  </span>
+                  {isSummaryOpen ? (
+                    <ChevronUp className="w-4 h-4 text-slate-500" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-slate-500" />
+                  )}
+                </button>
+                {isSummaryOpen && (
+                  <div className="px-3 pb-3 space-y-2 text-xs text-slate-700">
+                    <div>
+                      <p className="text-[11px] font-semibold text-slate-900">Overview</p>
+                      <p className="mt-0.5">{selectedSummary.incident_overview}</p>
+                    </div>
+
+                    {selectedSummary.key_symptoms.length > 0 && (
+                      <div>
+                        <p className="text-[11px] font-semibold text-slate-900">Symptoms</p>
+                        <p className="mt-0.5">{selectedSummary.key_symptoms.join(" | ")}</p>
+                      </div>
+                    )}
+
+                    {selectedSummary.risk_factors.length > 0 && (
+                      <div>
+                        <p className="text-[11px] font-semibold text-slate-900">Risk Factors</p>
+                        <p className="mt-0.5">{selectedSummary.risk_factors.join(" | ")}</p>
+                      </div>
+                    )}
+
+                    {selectedSummary.actions_taken.length > 0 && (
+                      <div>
+                        <p className="text-[11px] font-semibold text-slate-900">Actions Taken</p>
+                        <p className="mt-0.5">{selectedSummary.actions_taken.join(" | ")}</p>
+                      </div>
+                    )}
+
+                    <div>
+                      <p className="text-[11px] font-semibold text-slate-900">Next Step</p>
+                      <p className="mt-0.5">{selectedSummary.recommended_next_step}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             {selected.messages.map((msg) => {
               const cfg = senderConfig[msg.sender];
               const Icon = cfg.icon;
