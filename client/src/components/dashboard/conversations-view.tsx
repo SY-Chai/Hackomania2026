@@ -173,8 +173,6 @@ function formatSummaryItem(text: string) {
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 }
 
-
-
 interface Props {
   conversations: UIConversation[];
   onCollapse?: () => void;
@@ -191,8 +189,11 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const [liveAudioStatus, setLiveAudioStatus] = useState("Live audio off");
   const [liveAudioError, setLiveAudioError] = useState<string | null>(null);
   const [lastSpeaker, setLastSpeaker] = useState<LiveSpeaker | null>(null);
-  const [takeoverConversationId, setTakeoverConversationId] = useState<string | null>(null);
-  const [pendingTakeoverConversationId, setPendingTakeoverConversationId] = useState<string | null>(null);
+  const [takeoverConversationId, setTakeoverConversationId] = useState<
+    string | null
+  >(null);
+  const [pendingTakeoverConversationId, setPendingTakeoverConversationId] =
+    useState<string | null>(null);
   const [takeoverError, setTakeoverError] = useState<string | null>(null);
   const [isSummaryOpen, setIsSummaryOpen] = useState(true);
 
@@ -222,8 +223,10 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
       .then((data: PABLocation | null) => {
         if (!cancelled && data) setPabLocation(data);
       })
-      .catch(() => { });
-    return () => { cancelled = true; };
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [selected?.pabId]);
 
   const stopOperatorMicrophoneCapture = useCallback(() => {
@@ -278,7 +281,9 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
           const copied = new Float32Array(input);
           const pcm16 = resampleTo24k(copied, audioContext.sampleRate);
 
-          console.log(`[FRONTEND DEBUG] Emitting operator_audio for conv ${conversationId}, buffer length: ${pcm16.buffer.byteLength}`);
+          console.log(
+            `[FRONTEND DEBUG] Emitting operator_audio for conv ${conversationId}, buffer length: ${pcm16.buffer.byteLength}`,
+          );
 
           socket.emit("operator_audio", {
             conversationId,
@@ -286,7 +291,9 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
           });
         };
       } catch {
-        setTakeoverError("Microphone access is required for operator takeover.");
+        setTakeoverError(
+          "Microphone access is required for operator takeover.",
+        );
         pendingTakeoverConversationIdRef.current = null;
         setPendingTakeoverConversationId(null);
         setTakeoverConversationId(null);
@@ -297,7 +304,11 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   );
 
   const schedulePlayback = useCallback((pcmChunk: Int16Array) => {
-    schedulePcm16Playback(playbackAudioContextRef.current, nextPlaybackTimeRef, pcmChunk);
+    schedulePcm16Playback(
+      playbackAudioContextRef.current,
+      nextPlaybackTimeRef,
+      pcmChunk,
+    );
   }, []);
 
   useEffect(() => {
@@ -321,19 +332,19 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
         prev.map((conv) =>
           conv.id === event.conversationId
             ? {
-              ...conv,
-              severity: event.severity ?? conv.severity,
-              severityConf:
-                event.severity_conf == null
-                  ? conv.severityConf
-                  : event.severity_conf,
-              severityReason: event.severity_reason ?? conv.severityReason,
-              operatorSummary:
-                event.operator_summary ??
-                (event.summary
-                  ? parseOperatorSummary(event.summary)
-                  : conv.operatorSummary),
-            }
+                ...conv,
+                severity: event.severity ?? conv.severity,
+                severityConf:
+                  event.severity_conf == null
+                    ? conv.severityConf
+                    : event.severity_conf,
+                severityReason: event.severity_reason ?? conv.severityReason,
+                operatorSummary:
+                  event.operator_summary ??
+                  (event.summary
+                    ? parseOperatorSummary(event.summary)
+                    : conv.operatorSummary),
+              }
             : conv,
         ),
       );
@@ -376,14 +387,14 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
         prev.map((conv) =>
           conv.id === c.id
             ? {
-              ...conv,
-              phase: normalizePhase(c.triage),
-              // classification: c.classification,
-              severity: c.severity,
-              severityConf: c.severity_conf,
-              severityReason: c.severity_reason,
-              operatorSummary: parseOperatorSummary(c.summary),
-            }
+                ...conv,
+                phase: normalizePhase(c.triage),
+                // classification: c.classification,
+                severity: c.severity,
+                severityConf: c.severity_conf,
+                severityReason: c.severity_reason,
+                operatorSummary: parseOperatorSummary(c.summary),
+              }
             : conv,
         ),
       );
@@ -396,7 +407,12 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
       const newMsg = {
         id: m.id,
         sender: role,
-        senderName: role === "agent" ? "AI Agent" : role === "human" ? "Operator" : "Senior",
+        senderName:
+          role === "agent"
+            ? "AI Agent"
+            : role === "human"
+              ? "Operator"
+              : "Senior",
         content: m.content ?? "",
         timestamp: m.timestamp ?? "",
       };
@@ -404,11 +420,12 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
         prev.map((conv) =>
           conv.id === m.conversation_id
             ? {
-              ...conv,
-              pabId: !conv.pabId && role === "senior" ? m.author_id : conv.pabId,
-              lastActivity: m.timestamp ?? conv.lastActivity,
-              messages: [...conv.messages, newMsg],
-            }
+                ...conv,
+                pabId:
+                  !conv.pabId && role === "senior" ? m.author_id : conv.pabId,
+                lastActivity: m.timestamp ?? conv.lastActivity,
+                messages: [...conv.messages, newMsg],
+              }
             : conv,
         ),
       );
@@ -554,7 +571,8 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   ]);
 
   const orderedConversations = [...liveConversations].sort((a, b) => {
-    const severityDelta = getSeverityRank(a.severity) - getSeverityRank(b.severity);
+    const severityDelta =
+      getSeverityRank(a.severity) - getSeverityRank(b.severity);
     if (severityDelta !== 0) return severityDelta;
 
     const aTs = a.lastActivity ? new Date(a.lastActivity).getTime() : 0;
@@ -660,7 +678,10 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                   onClick={() => {
                     setSelectedId(conv.id);
                     if (listenTargetId && listenTargetId !== conv.id) {
-                      listenerSocketRef.current?.emit("operator_takeover_stop", listenTargetId);
+                      listenerSocketRef.current?.emit(
+                        "operator_takeover_stop",
+                        listenTargetId,
+                      );
                       stopOperatorMicrophoneCapture();
                       setLiveAudioStatus("Live audio off");
                       setLiveAudioError(null);
@@ -750,9 +771,13 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               <span className="flex items-center gap-1 text-xs text-slate-500 mt-0.5">
                 <MapPin className="w-3 h-3 shrink-0" />
                 {pabLocation
-                  ? [pabLocation.unitNo, pabLocation.streetName, pabLocation.postalCode && `S(${pabLocation.postalCode})`]
-                    .filter(Boolean)
-                    .join(", ") || `ID: ${selected.id.slice(0, 8)}…`
+                  ? [
+                      pabLocation.unitNo,
+                      pabLocation.streetName,
+                      pabLocation.postalCode && `S(${pabLocation.postalCode})`,
+                    ]
+                      .filter(Boolean)
+                      .join(", ") || `ID: ${selected.id.slice(0, 8)}…`
                   : `ID: ${selected.id.slice(0, 8)}…`}
               </span>
             </div>
@@ -784,12 +809,15 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
             </div>
             <div className="flex flex-wrap items-center justify-start gap-2">
               <Button
-                className="min-w-[140px] justify-center"
+                className="min-w-35 justify-center"
                 variant={isListeningSelected ? "destructive" : "outline"}
                 size="sm"
                 onClick={() => {
                   if (isListeningSelected) {
-                    listenerSocketRef.current?.emit("operator_takeover_stop", selected.id);
+                    listenerSocketRef.current?.emit(
+                      "operator_takeover_stop",
+                      selected.id,
+                    );
                     stopOperatorMicrophoneCapture();
                     setLiveAudioStatus("Live audio off");
                     setLiveAudioError(null);
@@ -832,13 +860,18 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 size="sm"
                 onClick={() => {
                   if (isTakeoverSelected || isTakeoverPending) {
-                    listenerSocketRef.current?.emit("operator_takeover_stop", selected.id);
+                    listenerSocketRef.current?.emit(
+                      "operator_takeover_stop",
+                      selected.id,
+                    );
                     stopOperatorMicrophoneCapture();
                     pendingTakeoverConversationIdRef.current = null;
                     setPendingTakeoverConversationId(null);
                     setTakeoverConversationId(null);
                     setTakeoverError(null);
-                    setLiveAudioStatus(isListeningSelected ? "Listening live" : "Live audio off");
+                    setLiveAudioStatus(
+                      isListeningSelected ? "Listening live" : "Live audio off",
+                    );
                     return;
                   }
 
@@ -912,7 +945,9 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
           {(liveAudioError || takeoverError) && (
             <>
               <Separator orientation="vertical" className="h-3" />
-              <span className="text-red-600">{liveAudioError || takeoverError}</span>
+              <span className="text-red-600">
+                {liveAudioError || takeoverError}
+              </span>
             </>
           )}
         </div>
@@ -939,13 +974,17 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                 {isSummaryOpen && (
                   <div className="px-3 pb-3 space-y-3 text-xs text-slate-700">
                     <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Overview</p>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        Overview
+                      </p>
                       <p className="mt-1 text-[13px] leading-relaxed text-slate-800">
                         {formatSummaryItem(selectedSummary.incident_overview)}
                       </p>
                       {selected.severityReason && (
                         <p className="mt-1 text-[11px] text-slate-500">
-                          <span className="font-semibold text-slate-600">Severity reason:</span>{" "}
+                          <span className="font-semibold text-slate-600">
+                            Severity reason:
+                          </span>{" "}
                           {formatSummaryItem(selected.severityReason)}
                         </p>
                       )}
@@ -953,7 +992,9 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
                     {selectedSummary.key_symptoms.length > 0 && (
                       <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Symptoms</p>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                          Symptoms
+                        </p>
                         <ul className="mt-1 flex flex-wrap gap-1.5">
                           {selectedSummary.key_symptoms.map((item, idx) => (
                             <li
@@ -969,10 +1010,14 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
                     {selectedSummary.risk_factors.length > 0 && (
                       <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Risk Factors</p>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                          Risk Factors
+                        </p>
                         <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[12px] text-slate-700">
                           {selectedSummary.risk_factors.map((item, idx) => (
-                            <li key={`risk-${idx}`}>{formatSummaryItem(item)}</li>
+                            <li key={`risk-${idx}`}>
+                              {formatSummaryItem(item)}
+                            </li>
                           ))}
                         </ul>
                       </div>
@@ -980,19 +1025,27 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
                     {selectedSummary.actions_taken.length > 0 && (
                       <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Actions Taken</p>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                          Actions Taken
+                        </p>
                         <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[12px] text-slate-700">
                           {selectedSummary.actions_taken.map((item, idx) => (
-                            <li key={`action-${idx}`}>{formatSummaryItem(item)}</li>
+                            <li key={`action-${idx}`}>
+                              {formatSummaryItem(item)}
+                            </li>
                           ))}
                         </ul>
                       </div>
                     )}
 
                     <div className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-2">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-blue-700">Recommended Next Step</p>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-blue-700">
+                        Recommended Next Step
+                      </p>
                       <p className="mt-1 text-[12px] leading-relaxed text-blue-900">
-                        {formatSummaryItem(selectedSummary.recommended_next_step)}
+                        {formatSummaryItem(
+                          selectedSummary.recommended_next_step,
+                        )}
                       </p>
                     </div>
                   </div>
