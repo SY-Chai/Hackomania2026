@@ -478,6 +478,11 @@ export function setupSocket(io) {
             ...latestSeverity,
             updatedAt: new Date().toISOString(),
           });
+          if (pabId) {
+            // Seed conversation with a PAB-authored marker so map status can
+            // resolve active-call location immediately before transcripts arrive.
+            await saveMessage(activeConversationId, pabId, "", notifyDashboard);
+          }
           console.log(
             `✅ [Socket ${socket.id}] Conversation created DB ID: ${activeConversationId}`,
           );

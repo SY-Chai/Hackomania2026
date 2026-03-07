@@ -391,6 +391,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
 
     es.addEventListener("message_insert", (e) => {
       const m = JSON.parse(e.data) as DBMessage;
+      if (!String(m.content ?? "").trim()) return;
       const role = deriveRole(m.author_id);
       const newMsg = {
         id: m.id,

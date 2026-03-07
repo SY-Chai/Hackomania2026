@@ -5,8 +5,10 @@ import Map, { Source, Layer, Popup } from "react-map-gl/mapbox";
 import type { MapRef, MapMouseEvent } from "react-map-gl/mapbox";
 import type { CircleLayer, SymbolLayer } from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
+import { io } from "socket.io-client";
 import { MapPin, Phone, Filter } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { resolveSocketServerUrl } from "@/lib/socket";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
 
@@ -128,7 +130,7 @@ export function SingaporeMap({
   const [filterOngoingOnly, setFilterOngoingOnly] = useState(false);
   const [isMapReady, setIsMapReady] = useState(false);
 
-  useEffect(() => {
+  const loadPabs = useCallback(() => {
     if (propPabs) return;
     fetch("/api/pabs")
       .then((r) => r.json())
@@ -138,6 +140,20 @@ export function SingaporeMap({
       })
       .catch(() => {});
   }, [propPabs, onStatsLoaded]);
+
+  useEffect(() => {
+    loadPabs();
+  }, [loadPabs]);
+
+  useEffect(() => {
+    if (propPabs) return;
+    const socket = io(resolveSocketServerUrl(), { transports: ["websocket"] });
+    socket.on("dashboard_update", loadPabs);
+    return () => {
+      socket.off("dashboard_update", loadPabs);
+      socket.disconnect();
+    };
+  }, [propPabs, loadPabs]);
 
   const pabs = propPabs ?? fetchedPabs ?? [];
 

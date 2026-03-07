@@ -83,21 +83,23 @@ export function toUIConversations(
 ): UIConversation[] {
   return raw.map((c) => {
     const messages: UIMessage[] = sortMessages(
-      c.messages.map((m) => {
-        const role = deriveRole(m.users?.type);
-        return {
-          id: m.id,
-          sender: role,
-          senderName:
-            role === "agent"
-              ? "AI Agent"
-              : role === "human"
-                ? "Operator"
-                : "Senior",
-          content: m.content ?? "",
-          timestamp: m.timestamp ?? "",
-        };
-      }),
+      c.messages
+        .filter((m) => String(m.content ?? "").trim().length > 0)
+        .map((m) => {
+          const role = deriveRole(m.users?.type);
+          return {
+            id: m.id,
+            sender: role,
+            senderName:
+              role === "agent"
+                ? "AI Agent"
+                : role === "human"
+                  ? "Operator"
+                  : "Senior",
+            content: m.content ?? "",
+            timestamp: m.timestamp ?? "",
+          };
+        }),
     );
 
     const seniorMsg = c.messages.find(
