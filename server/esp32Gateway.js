@@ -4,7 +4,7 @@ import { saveMessage } from "./db.js";
 import { getUTC8Time } from "./utils.js";
 
 const DEFAULT_ESP32_PATHS = ["/esp32-phone"];
-const ESP32_MAX_FRAME_BYTES = Number(process.env.ESP32_MAX_FRAME_BYTES || 4096);
+const ESP32_MAX_FRAME_BYTES = Number(process.env.ESP32_MAX_FRAME_BYTES || 1024);
 
 const DEFAULT_SEVERITY = {
   severity: "uncertain",
