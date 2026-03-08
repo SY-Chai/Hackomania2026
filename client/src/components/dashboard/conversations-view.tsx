@@ -211,7 +211,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const playbackAudioContextRef = useRef<AudioContext | null>(null);
   const nextPlaybackTimeRef = useRef(0);
   const joinedConversationIdRef = useRef<string | null>(null);
-  const pendingTakeoverConversationIdRef = useRef<string | null>(null);
+const pendingTakeoverConversationIdRef = useRef<string | null>(null);
   const inputAudioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);

@@ -56,18 +56,7 @@ export function setupSocket(io) {
 
     socket.on("start_emergency_session", async (data) => {
       const pabId = data?.pab_id || null; // Will fallback to null if not provided
-
       let agentUserId = process.env.AGENT_ID || null;
-      if (!agentUserId && supabase) {
-        const { data: agentData, error: agentErr } = await supabase
-          .from("users")
-          .select("id")
-          .eq("type", "agent")
-          .limit(1)
-          .single();
-        if (agentErr) console.error(`❌ Failed to fetch agent user:`, agentErr);
-        if (agentData?.id) agentUserId = agentData.id;
-      }
 
       if (openAiWs) {
         console.log(`[Socket ${socket.id}] WebSocket already exists.`);
@@ -86,14 +75,40 @@ export function setupSocket(io) {
         `[Socket ${socket.id}] Starting emergency session with OpenAI. PAB ID: ${pabId}`,
       );
 
-      if (supabase) {
+      // Start OpenAI WS connection immediately — before awaiting DB ops
+      const agentUrl = USE_MODAL_AGENT
+        ? MODAL_AGENT_WS_URL
+        : OPENAI_REALTIME_URL;
+      const agentHeaders = USE_MODAL_AGENT
+        ? {}
+        : {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            "OpenAI-Beta": "realtime=v1",
+          };
+
+      openAiWs = new WebSocket(agentUrl, { headers: agentHeaders });
+
+      // DB setup runs in parallel with the OpenAI connection handshake
+      const dbSetupPromise = (async () => {
+        if (!agentUserId && supabase) {
+          const { data: agentData, error: agentErr } = await supabase
+            .from("users")
+            .select("id")
+            .eq("type", "agent")
+            .limit(1)
+            .single();
+          if (agentErr) console.error(`❌ Failed to fetch agent user:`, agentErr);
+          if (agentData?.id) agentUserId = agentData.id;
+        }
+
+        if (!supabase) return null;
+
         const { data: dbData, error } = await supabase
           .from("conversations")
           .insert([
             {
               start: getUTC8Time(),
               triage: "agent",
-              // classification: "uncertain",
               severity: "uncertain",
               severity_conf: 25,
               severity_reason: "Awaiting enough context to assess severity.",
@@ -109,18 +124,21 @@ export function setupSocket(io) {
             `❌ [Socket ${socket.id}] Failed to create conversation:`,
             error,
           );
-        } else if (dbData?.length > 0) {
-          activeConversationId = dbData[0].id;
-          socket.join(activeConversationId);
-          liveConversationSessions.set(activeConversationId, {
+          return null;
+        }
+
+        if (dbData?.length > 0) {
+          const convId = dbData[0].id;
+          socket.join(convId);
+          liveConversationSessions.set(convId, {
             source: "openai",
             callerSocketId: socket.id,
             operatorSocketId: null,
             takeoverActive: false,
-            pabId: pabId, // Store it in session map
+            pabId: pabId,
           });
           io.emit("severity_update", {
-            conversationId: activeConversationId,
+            conversationId: convId,
             ...triage.getLatestSeverity(),
             updatedAt: new Date().toISOString(),
           });
@@ -128,66 +146,15 @@ export function setupSocket(io) {
           if (pabId) {
             // Seed conversation with a PAB-authored marker so map status can
             // resolve active-call location immediately before transcripts arrive.
-            await saveMessage(activeConversationId, pabId, "", notifyDashboard);
+            await saveMessage(convId, pabId, "", notifyDashboard);
           }
           console.log(
-            `✅ [Socket ${socket.id}] Conversation created DB ID: ${activeConversationId}`,
+            `✅ [Socket ${socket.id}] Conversation created DB ID: ${convId}`,
           );
+          return convId;
         }
-      }
-
-      const agentUrl = USE_MODAL_AGENT
-        ? MODAL_AGENT_WS_URL
-        : OPENAI_REALTIME_URL;
-      const agentHeaders = USE_MODAL_AGENT
-        ? {}
-        : {
-            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-            "OpenAI-Beta": "realtime=v1",
-          };
-
-      openAiWs = new WebSocket(agentUrl, { headers: agentHeaders });
-
-      openAiWs.on("open", () => {
-        console.log(
-          `[Socket ${socket.id}] Connected to ${USE_MODAL_AGENT ? "Modal agent" : "OpenAI Realtime API"}`,
-        );
-
-        if (USE_MODAL_AGENT) {
-          openAiWs.send(
-            JSON.stringify({
-              type: "session.update",
-              session: {
-                voice: "alloy",
-                system_prompt: ASSISTANT_PROMPT.trim(),
-              },
-            }),
-          );
-        } else {
-          openAiWs.send(
-            JSON.stringify({
-              type: "session.update",
-              session: {
-                modalities: ["audio", "text"],
-                instructions: ASSISTANT_PROMPT.trim(),
-                voice: "sage",
-                input_audio_format: "pcm16",
-                output_audio_format: "pcm16",
-                input_audio_transcription: { model: "gpt-4o-transcribe" },
-                turn_detection: {
-                  type: "server_vad",
-                  threshold: 0.65,
-                  prefix_padding_ms: 300,
-                  silence_duration_ms: 1000,
-                },
-              },
-            }),
-          );
-        }
-
-        socket.emit("session_started");
-        triage.startTriageLoop();
-      });
+        return null;
+      })();
 
       function handleTranscriptDone(role, audioBuffer, event) {
         triage.pushTriageTurn(role, event.transcript);
@@ -224,6 +191,50 @@ export function setupSocket(io) {
           );
         }
       }
+
+      openAiWs.on("open", async () => {
+        console.log(
+          `[Socket ${socket.id}] Connected to ${USE_MODAL_AGENT ? "Modal agent" : "OpenAI Realtime API"}`,
+        );
+
+        // Resolve conversation ID — DB may still be in-flight
+        activeConversationId = await dbSetupPromise;
+
+        if (USE_MODAL_AGENT) {
+          openAiWs.send(
+            JSON.stringify({
+              type: "session.update",
+              session: {
+                voice: "alloy",
+                system_prompt: ASSISTANT_PROMPT.trim(),
+              },
+            }),
+          );
+        } else {
+          openAiWs.send(
+            JSON.stringify({
+              type: "session.update",
+              session: {
+                modalities: ["audio", "text"],
+                instructions: ASSISTANT_PROMPT.trim(),
+                voice: "sage",
+                input_audio_format: "pcm16",
+                output_audio_format: "pcm16",
+                input_audio_transcription: { model: "whisper-1" },
+                turn_detection: {
+                  type: "server_vad",
+                  threshold: 0.65,
+                  prefix_padding_ms: 200,
+                  silence_duration_ms: 600,
+                },
+              },
+            }),
+          );
+        }
+
+        socket.emit("session_started");
+        triage.startTriageLoop();
+      });
 
       openAiWs.on("message", (message) => {
         try {
@@ -390,10 +401,7 @@ export function setupSocket(io) {
       }
 
       openAiWs.send(
-        JSON.stringify({
-          type: "input_audio_buffer.append",
-          audio: buf.toString("base64"),
-        }),
+        `{"type":"input_audio_buffer.append","audio":"${buf.toString("base64")}"}`,
       );
 
       if (isRecordingUser) {

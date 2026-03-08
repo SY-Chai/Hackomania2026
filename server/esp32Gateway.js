@@ -217,12 +217,12 @@ async function handleEsp32Connection(io, ws, request) {
             voice: "sage",
             input_audio_format: "pcm16",
             output_audio_format: "pcm16",
-            input_audio_transcription: { model: "gpt-4o-transcribe" },
+            input_audio_transcription: { model: "whisper-1" },
             turn_detection: {
               type: "server_vad",
               threshold: 0.65,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 1000,
+              prefix_padding_ms: 200,
+              silence_duration_ms: 600,
             },
           },
         }),
@@ -370,6 +370,9 @@ async function handleEsp32Connection(io, ws, request) {
   };
 
   try {
+    // Start OpenAI WS connection immediately — before awaiting DB ops
+    connectToOpenAI();
+
     const created = await createEsp32Conversation(io, pabId);
     conversationId = created.id;
     persistedConversation = created.persisted;
@@ -395,9 +398,6 @@ async function handleEsp32Connection(io, ws, request) {
       `[ESP32] Device connected from ${remoteAddress}. Conversation: ${conversationId}`,
     );
 
-    // Establish the OpenAI Realtime voice session for this ESP32 call
-    connectToOpenAI();
-
     ws.on("message", (message, isBinary) => {
       if (!conversationId || !isBinary) return;
 
@@ -413,10 +413,7 @@ async function handleEsp32Connection(io, ws, request) {
       // Forward to OpenAI Realtime only when operator takeover is not active
       if (!session.takeoverActive && openAiWs?.readyState === WebSocket.OPEN) {
         openAiWs.send(
-          JSON.stringify({
-            type: "input_audio_buffer.append",
-            audio: pcmBuffer.toString("base64"),
-          }),
+          `{"type":"input_audio_buffer.append","audio":"${pcmBuffer.toString("base64")}"}`,
         );
 
         if (isRecordingUser) {

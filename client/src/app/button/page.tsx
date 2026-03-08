@@ -324,7 +324,7 @@ function ButtonPageContent() {
               Conversation
             </p>
           </div>
-          <div className="flex-1 min-h-0 space-y-3 overflow-y-auto px-4 py-3">
+          <div className="flex-1 min-h-0 flex flex-col gap-3 overflow-y-auto px-4 py-3">
             {messages
               .filter((message) => message.role !== "system")
               .map((message) => {
@@ -334,18 +334,22 @@ function ButtonPageContent() {
               return (
                 <div
                   key={message.id}
-                  className={`max-w-[90%] rounded px-3 py-2 text-sm leading-6 ${
-                    isUser
-                      ? "ml-auto bg-slate-900 text-white"
-                      : isAgent
-                        ? "border border-slate-200 bg-slate-100 text-slate-900"
-                        : "border border-slate-200 bg-white text-slate-600"
-                  }`}
+                  className={`flex ${isUser ? "justify-end" : "justify-start"}`}
                 >
-                  <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                    {isUser ? "User" : isAgent ? "AI Agent" : "System"}
+                  <div
+                    className={`max-w-[85%] rounded px-3 py-2 text-sm leading-6 ${
+                      isUser
+                        ? "bg-slate-900 text-white"
+                        : isAgent
+                          ? "border border-slate-200 bg-slate-100 text-slate-900"
+                          : "border border-slate-200 bg-white text-slate-600"
+                    }`}
+                  >
+                    <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                      {isUser ? "You" : isAgent ? "AI Agent" : "System"}
+                    </div>
+                    <div>{message.text}</div>
                   </div>
-                  <div>{message.text}</div>
                 </div>
               );
             })}
