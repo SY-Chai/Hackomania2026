@@ -89,6 +89,35 @@ export async function fetchUsers(): Promise<DBUser[]> {
 
 const PAB_COLS = "id,longitude,latitude,unit_no,postal_code,street_name";
 
+export async function fetchOngoingPabIds(): Promise<{
+  pabIds: Set<string>;
+  count: number;
+}> {
+  const { data: ongoing, error: err1 } = await supabase!
+    .from("conversations")
+    .select("id")
+    .is("end", null);
+  if (err1) throw err1;
+
+  const ids = ongoing?.map((c) => c.id) ?? [];
+  if (ids.length === 0) return { pabIds: new Set(), count: 0 };
+
+  const { data: messages, error: err2 } = await supabase!
+    .from("messages")
+    .select("author_id, users(type)")
+    .in("conversation_id", ids);
+  if (err2) throw err2;
+
+  const pabIds = new Set(
+    messages
+      ?.filter((m) => m.users?.type === "pab")
+      .map((m) => m.author_id)
+      .filter((id): id is string => id !== null) ?? [],
+  );
+
+  return { pabIds, count: ids.length };
+}
+
 export async function fetchPABs(): Promise<DBPAB[]> {
   const pageSize = 1000;
 

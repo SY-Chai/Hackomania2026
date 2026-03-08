@@ -1,20 +1,19 @@
 import { NextResponse } from "next/server";
-import { fetchPABs, fetchConversationsWithMessages } from "@/lib/supabase";
-import { toPABMarkers, isOngoing } from "@/lib/dashboard-utils";
+import { fetchPABs, fetchOngoingPabIds } from "@/lib/supabase";
+import { toPABMarkers } from "@/lib/dashboard-utils";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300; // cache PABs for 5 minutes
 
 export async function GET() {
-  const [pabs, conversations] = await Promise.all([
+  const [pabs, { pabIds, count }] = await Promise.all([
     fetchPABs(),
-    fetchConversationsWithMessages(),
+    fetchOngoingPabIds(),
   ]);
 
-  const ongoing = conversations.filter(isOngoing);
-  const markers = toPABMarkers(pabs, ongoing);
+  const markers = toPABMarkers(pabs, pabIds);
   const stationary = pabs.filter(
     (p) => p.latitude != null && p.longitude != null,
   ).length;
 
-  return NextResponse.json({ markers, stationary, ongoing: ongoing.length });
+  return NextResponse.json({ markers, stationary, ongoing: count });
 }
