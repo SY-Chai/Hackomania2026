@@ -139,10 +139,8 @@ export function toPABMarkers(
   const ongoingPabIds = new Set(
     ongoingConversations
       .map((c) => {
-        const userMsg = c.messages.find(
-          (m) => deriveRole(m.users?.type) === "senior",
-        );
-        return userMsg ? userMsg.author_id : null;
+        const pabMsg = c.messages.find((m) => m.users?.type === "pab");
+        return pabMsg ? pabMsg.author_id : null;
       })
       .filter((id): id is string => typeof id === "string"),
   );
