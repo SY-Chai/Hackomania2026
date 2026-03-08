@@ -12,6 +12,7 @@ import {
 } from "./triage.js";
 
 const DEFAULT_ESP32_PATHS = ["/esp32-phone"];
+const DEFAULT_ESP32_ELDERLY_UUID = "b96b0200-a7ae-4593-b3cb-00b878b7c6b8";
 // Render/proxy paths are more stable with smaller frames than 4KB.
 const rawMaxFrame = Number(process.env.ESP32_MAX_FRAME_BYTES || 1024);
 const ESP32_MAX_FRAME_BYTES = Math.max(
@@ -101,7 +102,7 @@ export function forwardOperatorAudioToEsp32(session, pcm24kBuffer) {
   return forwarded;
 }
 
-async function createEsp32Conversation(io, pabId) {
+async function createEsp32Conversation(io, elderlyUserId) {
   if (!supabase) {
     const id = `esp32-${Date.now().toString(36)}`;
     return { id, persisted: false };
@@ -127,8 +128,8 @@ async function createEsp32Conversation(io, pabId) {
   const id = data?.[0]?.id;
   if (!id) throw new Error("Conversation insert returned no ID.");
 
-  if (pabId) {
-    await saveMessage(id, pabId, "ESP32 call connected.", () =>
+  if (elderlyUserId) {
+    await saveMessage(id, elderlyUserId, "ESP32 call connected.", () =>
       io.emit("dashboard_update"),
     );
   }
@@ -159,6 +160,11 @@ async function handleEsp32Connection(io, ws, request) {
   let conversationId = null;
   let persistedConversation = false;
   let finished = false;
+  let elderlyUserId =
+    process.env.ESP32_ELDERLY_UUID || DEFAULT_ESP32_ELDERLY_UUID;
+  let elderlyUserIdPromise = null;
+  let agentUserId = process.env.AGENT_ID || null;
+  let agentUserIdPromise = null;
 
   // OpenAI Realtime connection for this ESP32 session
   let openAiWs = null;
@@ -174,8 +180,6 @@ async function handleEsp32Connection(io, ws, request) {
   let fullConversationPcm = [];
   let fullConversationPcmBytes = 0;
 
-  const requestUrl = parseRequestUrl(request);
-  const pabId = requestUrl.searchParams.get("pab_id") || null;
   const remoteAddress = request.socket.remoteAddress || "unknown";
 
   const triage = createTriageManager({
@@ -183,6 +187,68 @@ async function handleEsp32Connection(io, ws, request) {
     getConversationId: () => conversationId,
     label: `ESP32 ${remoteAddress}`,
   });
+
+  function resolveElderlyUserId() {
+    if (elderlyUserIdPromise || !supabase) {
+      return elderlyUserIdPromise || Promise.resolve(elderlyUserId);
+    }
+
+    elderlyUserIdPromise = (async () => {
+      const configuredId = elderlyUserId;
+      if (!configuredId) return null;
+
+      const { data: userRow, error: userErr } = await supabase
+        .from("users")
+        .select("id")
+        .eq("id", configuredId)
+        .maybeSingle();
+      if (userErr) {
+        console.error("❌ [ESP32] Failed to validate elderly UUID in users:", userErr);
+      } else if (!userRow?.id) {
+        console.warn(
+          `⚠ [ESP32] UUID ${configuredId} not found in users table; continuing with configured value.`,
+        );
+      }
+
+      const { data: elderlyRow, error: elderlyErr } = await supabase
+        .from("elderly")
+        .select("id")
+        .eq("id", configuredId)
+        .maybeSingle();
+      if (elderlyErr) {
+        console.error("❌ [ESP32] Failed to validate elderly UUID in elderly:", elderlyErr);
+      } else if (!elderlyRow?.id) {
+        console.warn(
+          `⚠ [ESP32] UUID ${configuredId} not found in elderly table; continuing with configured value.`,
+        );
+      }
+
+      return configuredId;
+    })();
+
+    return elderlyUserIdPromise;
+  }
+
+  function resolveAgentUserId() {
+    if (agentUserId || !supabase) return Promise.resolve(agentUserId);
+    if (!agentUserIdPromise) {
+      agentUserIdPromise = (async () => {
+        const { data: agentData, error: agentErr } = await supabase
+          .from("users")
+          .select("id")
+          .eq("type", "agent")
+          .limit(1)
+          .single();
+        if (agentErr) {
+          console.error("❌ [ESP32] Failed to fetch agent user:", agentErr);
+          return null;
+        }
+        agentUserId = agentData?.id || null;
+        return agentUserId;
+      })();
+    }
+    return agentUserIdPromise;
+  }
 
   function stopAiPlaybackPump() {
     if (aiPlaybackTimer) {
@@ -253,11 +319,18 @@ async function handleEsp32Connection(io, ws, request) {
         fullConversationPcmBytes += fullPcmBuffer.length;
       }
 
-      // For ESP32 sessions: user audio is authored by the PAB, agent has no DB user
-      const authorId = role === "user" ? pabId : null;
-      saveMessage(conversationId, authorId, transcript, () =>
-        io.emit("dashboard_update"),
-      );
+      void (async () => {
+        // Mirror browser caller flow: user -> elderly user, agent -> agent user.
+        const authorId =
+          role === "user"
+            ? await resolveElderlyUserId()
+            : role === "agent"
+              ? await resolveAgentUserId()
+              : null;
+        saveMessage(conversationId, authorId, transcript, () =>
+          io.emit("dashboard_update"),
+        );
+      })();
     }
   }
 
@@ -456,10 +529,16 @@ async function handleEsp32Connection(io, ws, request) {
   };
 
   try {
+    // Warm this lookup so early user transcripts are authored correctly.
+    elderlyUserId = (await resolveElderlyUserId()) || elderlyUserId;
+
+    // Warm this lookup so early assistant transcripts are authored correctly.
+    void resolveAgentUserId();
+
     // Start OpenAI WS connection immediately — before awaiting DB ops
     connectToOpenAI();
 
-    const created = await createEsp32Conversation(io, pabId);
+    const created = await createEsp32Conversation(io, elderlyUserId);
     conversationId = created.id;
     persistedConversation = created.persisted;
 
@@ -468,7 +547,7 @@ async function handleEsp32Connection(io, ws, request) {
       callerSocketId: null,
       operatorSocketId: null,
       takeoverActive: false,
-      pabId,
+      pabId: elderlyUserId,
       esp32Socket: ws,
     });
 
