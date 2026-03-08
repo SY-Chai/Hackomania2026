@@ -12,7 +12,25 @@ import {
 } from "./triage.js";
 
 const DEFAULT_ESP32_PATHS = ["/esp32-phone"];
-const ESP32_MAX_FRAME_BYTES = Number(process.env.ESP32_MAX_FRAME_BYTES || 1024);
+// Render/proxy paths are more stable with smaller frames than 4KB.
+const rawMaxFrame = Number(process.env.ESP32_MAX_FRAME_BYTES || 1024);
+const ESP32_MAX_FRAME_BYTES = Math.max(
+  320,
+  (Number.isFinite(rawMaxFrame) ? Math.floor(rawMaxFrame) : 1024) & ~1,
+);
+const rawAiTarget = Number(process.env.ESP32_AI_TARGET_FRAME_BYTES || 960); // 20ms @24k PCM16
+const ESP32_AI_TARGET_FRAME_BYTES = Math.max(
+  320,
+  Math.min(
+    ESP32_MAX_FRAME_BYTES,
+    (Number.isFinite(rawAiTarget) ? Math.floor(rawAiTarget) : 960) & ~1,
+  ),
+);
+const PCM16_24K_BYTES_PER_SECOND = 24000 * 2;
+const ESP32_AI_FRAME_INTERVAL_MS = Math.max(
+  10,
+  Math.round((ESP32_AI_TARGET_FRAME_BYTES / PCM16_24K_BYTES_PER_SECOND) * 1000),
+);
 
 function resolveEsp32Paths() {
   const fromEnv = process.env.ESP32_WS_PATHS || process.env.ESP32_WS_PATH || "";
@@ -70,15 +88,11 @@ export function isEsp32SessionLive(session) {
 }
 
 export function forwardOperatorAudioToEsp32(session, pcm24kBuffer) {
-  if (!isEsp32SessionLive(session)) {
-    console.log("[ESP32 DEBUG] isEsp32SessionLive is false, not forwarding.");
-    return false;
-  }
+  if (!isEsp32SessionLive(session)) return false;
 
-  const buf = Buffer.isBuffer(pcm24kBuffer) ? pcm24kBuffer : Buffer.from(pcm24kBuffer);
-  console.log(
-    `[ESP32 DEBUG] Forwarding ${buf.length} bytes framesize: ${ESP32_MAX_FRAME_BYTES}...`,
-  );
+  const buf = Buffer.isBuffer(pcm24kBuffer)
+    ? pcm24kBuffer
+    : Buffer.from(pcm24kBuffer);
 
   const forwarded = sendPcmChunked(session.esp32Socket, buf);
   if (!forwarded) {
@@ -153,6 +167,9 @@ async function handleEsp32Connection(io, ws, request) {
   let assistantAudioBuffer = [];
   let userAudioBuffer = [];
   let rollingBuffer = [];
+  let aiPlaybackBuffer = Buffer.alloc(0);
+  let aiOutboundFrames = [];
+  let aiPlaybackTimer = null;
   let isRecordingUser = false;
   let fullConversationPcm = [];
   let fullConversationPcmBytes = 0;
@@ -166,6 +183,62 @@ async function handleEsp32Connection(io, ws, request) {
     getConversationId: () => conversationId,
     label: `ESP32 ${remoteAddress}`,
   });
+
+  function stopAiPlaybackPump() {
+    if (aiPlaybackTimer) {
+      clearInterval(aiPlaybackTimer);
+      aiPlaybackTimer = null;
+    }
+  }
+
+  function sendQueuedAiFrame() {
+    if (!aiOutboundFrames.length) return;
+    if (ws.readyState !== WebSocket.OPEN) return;
+
+    const session = conversationId
+      ? liveConversationSessions.get(conversationId)
+      : null;
+    if (session?.takeoverActive) {
+      aiOutboundFrames = [];
+      return;
+    }
+
+    const frame = aiOutboundFrames.shift();
+    if (!frame?.length) return;
+
+    sendPcmChunked(ws, frame);
+    if (conversationId) {
+      io.to(conversationId).emit("conversation_audio", "agent", frame);
+    }
+  }
+
+  function startAiPlaybackPump() {
+    if (aiPlaybackTimer) return;
+    aiPlaybackTimer = setInterval(() => {
+      sendQueuedAiFrame();
+      if (!aiOutboundFrames.length) stopAiPlaybackPump();
+    }, ESP32_AI_FRAME_INTERVAL_MS);
+  }
+
+  function queueAiFrame(frame) {
+    const pcm = toPcm16Buffer(frame);
+    if (!pcm.length) return;
+    aiOutboundFrames.push(Buffer.from(pcm));
+    startAiPlaybackPump();
+  }
+
+  function queueAiTailIfAny() {
+    if (!aiPlaybackBuffer.length) return;
+    const tail = Buffer.alloc(ESP32_AI_TARGET_FRAME_BYTES);
+    aiPlaybackBuffer.copy(
+      tail,
+      0,
+      0,
+      Math.min(aiPlaybackBuffer.length, tail.length),
+    );
+    aiPlaybackBuffer = Buffer.alloc(0);
+    queueAiFrame(tail);
+  }
 
   function handleTranscriptDone(role, audioBuffer, transcript, itemId) {
     triage.pushTriageTurn(role, transcript);
@@ -242,6 +315,10 @@ async function handleEsp32Connection(io, ws, request) {
         }
 
         switch (event.type) {
+          case "response.audio.done":
+            queueAiTailIfAny();
+            break;
+
           case "response.audio.delta": {
             if (!event.delta) break;
 
@@ -249,24 +326,31 @@ async function handleEsp32Connection(io, ws, request) {
               ? liveConversationSessions.get(conversationId)
               : null;
             // Suppress AI audio to device during operator takeover
-            if (session?.takeoverActive) break;
+            if (session?.takeoverActive) {
+              aiPlaybackBuffer = Buffer.alloc(0);
+              aiOutboundFrames = [];
+              stopAiPlaybackPump();
+              break;
+            }
 
             const buffer = Buffer.from(event.delta, "base64");
             assistantAudioBuffer.push(buffer);
+            aiPlaybackBuffer = Buffer.concat([aiPlaybackBuffer, buffer]);
 
-            // Forward AI speech to the ESP32 device
-            if (ws.readyState === WebSocket.OPEN) {
-              sendPcmChunked(ws, buffer);
-            }
-
-            // Notify operators/listeners watching this conversation
-            if (conversationId) {
-              io.to(conversationId).emit("conversation_audio", "agent", buffer);
+            // Send fixed-size frames so ESP32 jitter buffering stays stable.
+            while (
+              aiPlaybackBuffer.length >= ESP32_AI_TARGET_FRAME_BYTES &&
+              ws.readyState === WebSocket.OPEN
+            ) {
+              const frame = aiPlaybackBuffer.subarray(0, ESP32_AI_TARGET_FRAME_BYTES);
+              aiPlaybackBuffer = aiPlaybackBuffer.subarray(ESP32_AI_TARGET_FRAME_BYTES);
+              queueAiFrame(frame);
             }
             break;
           }
 
           case "response.audio_transcript.done":
+            queueAiTailIfAny();
             handleTranscriptDone(
               "agent",
               assistantAudioBuffer,
@@ -329,6 +413,8 @@ async function handleEsp32Connection(io, ws, request) {
     finished = true;
 
     triage.stopTriageLoop();
+    stopAiPlaybackPump();
+    aiOutboundFrames = [];
 
     if (openAiWs) {
       openAiWs.close();
@@ -446,6 +532,9 @@ async function handleEsp32Connection(io, ws, request) {
 export function setupEsp32Gateway(server, io) {
   const wsPaths = resolveEsp32Paths();
   const wss = new WebSocketServer({ noServer: true });
+  console.log(
+    `[ESP32] Audio frames max=${ESP32_MAX_FRAME_BYTES}B aiTarget=${ESP32_AI_TARGET_FRAME_BYTES}B aiInterval=${ESP32_AI_FRAME_INTERVAL_MS}ms`,
+  );
 
   server.on("upgrade", (request, socket, head) => {
     let pathname = "/";

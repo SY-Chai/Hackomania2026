@@ -3,8 +3,19 @@
 #include <WebSocketsClient.h>
 #include <driver/i2s.h>
 #include <freertos/queue.h>
+#include <Wire.h>
+#include <driver/uart.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 
 #define LED_PIN 3
+#define PIN_BUTTON 12
+
+// ---- Google Geolocation API ----
+#define GOOGLE_API_KEY "AIzaSyDxWRscaF_H-Uk-QSSyiF8MRQ-cTPWlOYk"
+
+#define PIN_SCL 44 // blue
+#define PIN_SDA 43 // cyan
 
 // ---- WiFi credentials ----
 #define WIFI_SSID "LLI-GUEST"
@@ -12,16 +23,16 @@
 
 // ---- WebSocket server ----
 #ifndef WS_HOST
-#define WS_HOST "hackomania2026.onrender.com" // hostname only, no scheme
+#define WS_HOST "172.29.17.88" // hostname only, no scheme
 #endif
 #ifndef WS_PORT
-#define WS_PORT 443
+#define WS_PORT 3001
 #endif
 #ifndef WS_PATH
 #define WS_PATH "/esp32-phone" // optional: /esp32-phone?pab_id=<PAB_UUID>
 #endif
 #ifndef WS_SECURE
-#define WS_SECURE 1 // 1 = wss (Render), 0 = ws (local dev)
+#define WS_SECURE 0 // 1 = wss (Render), 0 = ws (local dev)
 #endif
 
 // mic (PDM)
@@ -81,7 +92,7 @@ static volatile int dbgSpkDropped = 0; // speaker chunks dropped (DMA full)
 
 // ---- Software volume (0–100) ----
 // Adjust this to control speaker loudness. 100 = full, 25 = quarter volume.
-#define SPEAKER_VOLUME 40
+#define SPEAKER_VOLUME 100
 
 static void applyVolume(uint8_t *data, size_t len)
 {
@@ -129,6 +140,295 @@ void processMicAudio(int16_t *samples, size_t count)
       filtered = 0;
     samples[i] = (int16_t)filtered;
   }
+}
+
+// ---- LSM6DSR IMU — Hardware Free-Fall Detection ----
+#define LSM6DSR_ADDR_LOW  0x6A
+#define LSM6DSR_ADDR_HIGH 0x6B
+#define LSM6DSR_ID        0x6B
+
+#define REG_WHO_AM_I    0x0F
+#define REG_CTRL1_XL    0x10
+#define REG_CTRL2_G     0x11
+#define REG_CTRL3_C     0x12
+#define REG_ALL_INT_SRC 0x1A
+#define REG_WAKE_UP_SRC 0x1B
+#define REG_OUTX_L_G    0x22
+#define REG_OUTX_L_A    0x28
+#define REG_TAP_CFG0    0x56
+#define REG_TAP_CFG2    0x58
+#define REG_WAKE_UP_DUR 0x5C
+#define REG_FREE_FALL   0x5D
+
+static uint8_t imuAddr = 0;
+static unsigned long lastFallTime = 0;
+#define FALL_COOLDOWN_MS 1000
+static SemaphoreHandle_t i2cMutex = NULL;
+
+static uint8_t imuReadReg(uint8_t reg)
+{
+  if (i2cMutex && xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE) return 0;
+  uint8_t result = 0;
+  for (int attempt = 0; attempt < 3; attempt++)
+  {
+    Wire.beginTransmission(imuAddr);
+    Wire.write(reg);
+    if (Wire.endTransmission(true) != 0) { delayMicroseconds(100); continue; }
+    if (Wire.requestFrom(imuAddr, (uint8_t)1) == 1) { result = Wire.read(); break; }
+    delayMicroseconds(100);
+  }
+  if (i2cMutex) xSemaphoreGive(i2cMutex);
+  return result;
+}
+
+static void imuWriteReg(uint8_t reg, uint8_t val)
+{
+  if (i2cMutex && xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE) return;
+  for (int attempt = 0; attempt < 3; attempt++)
+  {
+    Wire.beginTransmission(imuAddr);
+    Wire.write(reg);
+    Wire.write(val);
+    if (Wire.endTransmission(true) == 0) break;
+    delayMicroseconds(100);
+  }
+  if (i2cMutex) xSemaphoreGive(i2cMutex);
+}
+
+bool setupIMU()
+{
+  Wire.setPins(PIN_SDA, PIN_SCL);
+  Wire.begin(PIN_SDA, PIN_SCL, 400000);
+
+  Serial.println("[IMU] I2C bus scan on SDA=" + String(PIN_SDA) + " SCL=" + String(PIN_SCL));
+  int nDevices = 0;
+  for (uint8_t addr = 1; addr < 127; addr++)
+  {
+    Wire.beginTransmission(addr);
+    uint8_t err = Wire.endTransmission();
+    if (err == 0)
+    {
+      Serial.printf("[IMU]   Found device at 0x%02X\n", addr);
+      nDevices++;
+    }
+  }
+  if (nDevices == 0)
+    Serial.println("[IMU]   No I2C devices found! Check wiring & pull-ups.");
+
+  for (uint8_t addr : {(uint8_t)LSM6DSR_ADDR_LOW, (uint8_t)LSM6DSR_ADDR_HIGH})
+  {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) { imuAddr = addr; break; }
+  }
+  if (imuAddr == 0) { Serial.println("[IMU] LSM6DSR not found on I2C!"); return false; }
+
+  uint8_t whoami = imuReadReg(REG_WHO_AM_I);
+  if (whoami != LSM6DSR_ID)
+  {
+    Serial.printf("[IMU] Wrong WHO_AM_I: 0x%02X (expected 0x6B)\n", whoami);
+    return false;
+  }
+  Serial.printf("[IMU] LSM6DSR found at 0x%02X\n", imuAddr);
+
+  imuWriteReg(REG_CTRL3_C, 0x01); delay(20);
+  imuWriteReg(REG_CTRL3_C, 0x44);
+  imuWriteReg(REG_CTRL1_XL, 0x60);
+  imuWriteReg(REG_CTRL2_G, 0x60);
+
+  uint8_t tapCfg2 = imuReadReg(REG_TAP_CFG2);
+  imuWriteReg(REG_TAP_CFG2, tapCfg2 | 0x80);
+  uint8_t tapCfg0 = imuReadReg(REG_TAP_CFG0);
+  imuWriteReg(REG_TAP_CFG0, tapCfg0 | 0x01);
+  uint8_t wud = imuReadReg(REG_WAKE_UP_DUR);
+  imuWriteReg(REG_WAKE_UP_DUR, wud & 0x7F);
+  imuWriteReg(REG_FREE_FALL, (30 << 3) | 0x03);
+
+  Serial.println("[IMU] Free-fall detection enabled (312 mg, 30-cycle duration)");
+  return true;
+}
+
+static bool imuReadBurst(uint8_t reg, uint8_t *buf, uint8_t len)
+{
+  if (i2cMutex && xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
+  bool ok = false;
+  for (int attempt = 0; attempt < 3; attempt++)
+  {
+    Wire.beginTransmission(imuAddr);
+    Wire.write(reg);
+    if (Wire.endTransmission(true) != 0) { delayMicroseconds(100); continue; }
+    if (Wire.requestFrom(imuAddr, len) == len)
+    {
+      for (uint8_t i = 0; i < len; i++) buf[i] = Wire.read();
+      ok = true;
+      break;
+    }
+    delayMicroseconds(100);
+  }
+  if (i2cMutex) xSemaphoreGive(i2cMutex);
+  return ok;
+}
+
+void imuPrintDiagnostics()
+{
+  if (imuAddr == 0) return;
+  uint8_t buf[6];
+
+  imuReadBurst(REG_OUTX_L_G, buf, 6);
+  int16_t gx = (int16_t)(buf[1] << 8 | buf[0]);
+  int16_t gy = (int16_t)(buf[3] << 8 | buf[2]);
+  int16_t gz = (int16_t)(buf[5] << 8 | buf[4]);
+
+  imuReadBurst(REG_OUTX_L_A, buf, 6);
+  int16_t ax = (int16_t)(buf[1] << 8 | buf[0]);
+  int16_t ay = (int16_t)(buf[3] << 8 | buf[2]);
+  int16_t az = (int16_t)(buf[5] << 8 | buf[4]);
+
+  float ax_mg = ax * 0.061f, ay_mg = ay * 0.061f, az_mg = az * 0.061f;
+  float gx_dps = gx * 0.00875f, gy_dps = gy * 0.00875f, gz_dps = gz * 0.00875f;
+
+  Serial.printf("[IMU] Accel: %+7.0f %+7.0f %+7.0f mg  |  Gyro: %+8.2f %+8.2f %+8.2f dps\n",
+                ax_mg, ay_mg, az_mg, gx_dps, gy_dps, gz_dps);
+}
+
+bool checkFallDetection()
+{
+  if (imuAddr == 0) return false;
+  uint8_t src = imuReadReg(REG_WAKE_UP_SRC);
+  if (src & 0x20)
+  {
+    imuReadReg(REG_ALL_INT_SRC);
+    unsigned long now = millis();
+    if ((now - lastFallTime) > FALL_COOLDOWN_MS)
+    {
+      lastFallTime = now;
+      return true;
+    }
+  }
+  return false;
+}
+
+// ---- WiFi Geolocation via Google API ----
+static float lastLat = 0, lastLng = 0;
+static float lastAccuracy = 0;
+static bool locationValid = false;
+
+void fetchGeolocation()
+{
+  Serial.println("[GEO] Scanning WiFi networks...");
+  int n = WiFi.scanNetworks(false, false, false, 300);
+  if (n <= 0)
+  {
+    Serial.println("[GEO] No networks found!");
+    WiFi.scanDelete();
+    return;
+  }
+  Serial.printf("[GEO] Found %d networks, posting to Google...\n", n);
+
+  String json = "{\"wifiAccessPoints\":[";
+  int count = min(n, 20);
+  for (int i = 0; i < count; i++)
+  {
+    if (i > 0) json += ",";
+    json += "{\"macAddress\":\"" + WiFi.BSSIDstr(i) + "\",\"signalStrength\":" +
+            String(WiFi.RSSI(i)) + ",\"channel\":" + String(WiFi.channel(i)) + "}";
+  }
+  json += "]}";
+  WiFi.scanDelete();
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+
+  String url = "https://www.googleapis.com/geolocation/v1/geolocate?key=";
+  url += GOOGLE_API_KEY;
+
+  if (!http.begin(client, url))
+  {
+    Serial.println("[GEO] HTTP begin failed!");
+    return;
+  }
+  http.addHeader("Content-Type", "application/json");
+  int httpCode = http.POST(json);
+
+  if (httpCode == 200)
+  {
+    String resp = http.getString();
+    int latIdx = resp.indexOf("\"lat\"");
+    int lngIdx = resp.indexOf("\"lng\"");
+    int accIdx = resp.indexOf("\"accuracy\"");
+    if (latIdx > 0 && lngIdx > 0)
+    {
+      int latColon = resp.indexOf(':', latIdx);
+      int lngColon = resp.indexOf(':', lngIdx);
+      int latEnd = resp.indexOf(',', latColon);
+      int lngEnd = resp.indexOf('}', lngColon);
+      lastLat = resp.substring(latColon + 1, latEnd).toFloat();
+      lastLng = resp.substring(lngColon + 1, lngEnd).toFloat();
+      if (accIdx > 0)
+      {
+        int accColon = resp.indexOf(':', accIdx);
+        int accEnd = resp.indexOf('}', accColon);
+        lastAccuracy = resp.substring(accColon + 1, accEnd).toFloat();
+      }
+      locationValid = true;
+      Serial.printf("[GEO] Location: %.6f, %.6f  (accuracy: %.0f m)\n",
+                    lastLat, lastLng, lastAccuracy);
+    }
+    else
+    {
+      Serial.println("[GEO] Failed to parse response: " + resp);
+    }
+  }
+  else
+  {
+    Serial.printf("[GEO] HTTP error %d: %s\n", httpCode, http.getString().c_str());
+  }
+  http.end();
+}
+
+// ---- Call management ----
+// WebSocket is only established on button press or fall detection.
+volatile bool callActive = false;
+volatile bool wsPendingConnect = false;  // set by geo task, consumed by loop()
+static const char *callReason = "";
+
+// Forward declaration
+void onWsEvent(WStype_t type, uint8_t *payload, size_t length);
+
+// Background task: fetch geolocation (TLS needs ~16KB stack), then signal loop() to connect WS
+static void geoTask(void *param)
+{
+  fetchGeolocation();
+  wsPendingConnect = true;  // loop() will open the WebSocket on its own thread
+  Serial.println("[CALL] Geolocation done, signalling WS connect...");
+  vTaskDelete(NULL);
+}
+
+void startCall(const char *reason)
+{
+  if (callActive) return;
+  callActive = true;
+  callReason = reason;
+  Serial.printf("[CALL] Starting call (reason: %s)...\n", reason);
+
+  // Run geolocation in a separate task (TLS needs big stack)
+  xTaskCreatePinnedToCore(geoTask, "geo", 16384, NULL, 3, NULL, 1);
+}
+
+void endCall()
+{
+  if (!callActive) return;
+  Serial.println("[CALL] Ending call...");
+  callActive = false;
+  wsPendingConnect = false;
+  wsConnected = false;
+  ws.disconnect();
+  // Drain any leftover audio in queues
+  if (spkQueue) { SpkChunk tmp; while (xQueueReceive(spkQueue, &tmp, 0) == pdTRUE); }
+  if (micQueue) { xQueueReset(micQueue); }
+  i2s_zero_dma_buffer(I2S_SPK_PORT);
+  digitalWrite(LED_PIN, LOW);
+  Serial.println("[CALL] Call ended");
 }
 
 // ---- Mic capture task (runs on core 0) ----
@@ -254,12 +554,32 @@ void onWsEvent(WStype_t type, uint8_t *payload, size_t length)
     Serial.printf("[WS] Connected to %s:%d%s\n", WS_HOST, WS_PORT, WS_PATH);
     wsConnected = true;
     digitalWrite(LED_PIN, HIGH);
+    // Send call reason (e.g., "SOS_BUTTON" or "FALL_DETECTED")
+    if (callReason[0])
+    {
+      ws.sendTXT(callReason);
+    }
+    // Also send location if available
+    if (locationValid)
+    {
+      char buf[128];
+      snprintf(buf, sizeof(buf), "LOCATION:%.6f,%.6f,%.0f", lastLat, lastLng, lastAccuracy);
+      ws.sendTXT(buf);
+    }
     break;
   case WStype_DISCONNECTED:
     Serial.println("[WS] Disconnected");
     wsConnected = false;
     i2s_zero_dma_buffer(I2S_SPK_PORT); // silence speaker immediately
     digitalWrite(LED_PIN, LOW);
+    if (callActive)
+    {
+      Serial.println("[CALL] Server disconnected — ending call");
+      callActive = false;
+      wsPendingConnect = false;
+      if (spkQueue) { SpkChunk tmp; while (xQueueReceive(spkQueue, &tmp, 0) == pdTRUE); }
+      if (micQueue) { xQueueReset(micQueue); }
+    }
     break;
   case WStype_BIN:
     // Server sent PCM16 audio — push to speaker queue
@@ -298,6 +618,11 @@ void onWsEvent(WStype_t type, uint8_t *payload, size_t length)
     break;
   case WStype_TEXT:
     Serial.printf("[WS] Text: %s\n", payload);
+    if (strcmp((const char *)payload, "END_CALL") == 0)
+    {
+      Serial.println("[WS] Operator ended the call");
+      endCall();
+    }
     break;
   default:
     Serial.printf("[WS] Unhandled type: %d, length: %d\n", type, length);
@@ -312,8 +637,8 @@ void spkTask(void *param)
   static int16_t stereoBuf[SPK_MAX_CHUNK];
   SpkChunk chunk;
   bool buffering = true;       // start in buffering mode
-  const int JITTER_TARGET = 3; // prebuffer this many chunks (~240ms)
-  const int JITTER_MAX = 7;    // skip if buffer exceeds this
+  const int JITTER_TARGET = 6; // prebuffer this many chunks (~240ms)
+  const int JITTER_MAX = 12;    // skip if buffer exceeds this
 
   while (true)
   {
@@ -369,11 +694,24 @@ void setup()
   Serial.begin(115200);
   delay(500);
   pinMode(LED_PIN, OUTPUT);
+  pinMode(PIN_BUTTON, INPUT_PULLUP);
   pinMode(47, OUTPUT);
   digitalWrite(47, LOW);
 
   setupMic();
   setupSpeaker();
+
+  // Free GPIO 43/44 from UART0 so we can use them for I2C
+  uart_driver_install(UART_NUM_0, 256, 0, 0, NULL, 0);
+  uart_set_pin(UART_NUM_0, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE,
+               UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+  uart_driver_delete(UART_NUM_0);
+  gpio_reset_pin(GPIO_NUM_43);
+  gpio_reset_pin(GPIO_NUM_44);
+  Serial.println("[I2C] Released GPIO 43/44 from UART0");
+
+  i2cMutex = xSemaphoreCreateMutex();
+  setupIMU();
 
   Serial.println("\n\n=== ESP32-S3 Booting ===");
   Serial.flush();
@@ -397,14 +735,8 @@ void setup()
   }
   Serial.printf("\nWiFi connected! IP: %s\n", WiFi.localIP().toString().c_str());
 
-  // Connect WebSocket
-#if WS_SECURE
-  ws.beginSSL(WS_HOST, WS_PORT, WS_PATH);
-#else
-  ws.begin(WS_HOST, WS_PORT, WS_PATH);
-#endif
-  ws.onEvent(onWsEvent);
-  ws.setReconnectInterval(3000);
+  // WebSocket is NOT started at boot.
+  // It will be started on button press or fall detection.
 
   // Create queues
   micQueue = xQueueCreate(MIC_QUEUE_LEN, MIC_CHUNK_BYTES);
@@ -427,7 +759,71 @@ static unsigned long lastHeapPrint = 0;
 
 void loop()
 {
-  ws.loop(); // handles incoming WS audio -> speaker via onWsEvent
+  // Open WebSocket when geo task signals ready (must happen on loop thread)
+  if (wsPendingConnect)
+  {
+    wsPendingConnect = false;
+#if WS_SECURE
+    ws.beginSSL(WS_HOST, WS_PORT, WS_PATH);
+#else
+    ws.begin(WS_HOST, WS_PORT, WS_PATH);
+#endif
+    ws.onEvent(onWsEvent);
+    ws.setReconnectInterval(3000);
+    Serial.println("[CALL] WebSocket connecting...");
+  }
+
+  // Only run WebSocket when a call is active
+  if (callActive)
+  {
+    ws.loop();
+  }
+
+  // ---- Button press → start call (only operator can end) ----
+  static bool lastBtnState = HIGH;
+  static unsigned long lastBtnDebounce = 0;
+  bool btnState = digitalRead(PIN_BUTTON);
+  if (btnState == LOW && lastBtnState == HIGH && (millis() - lastBtnDebounce > 300))
+  {
+    lastBtnDebounce = millis();
+    if (!callActive)
+    {
+      Serial.println("[BTN] Button pressed — starting call...");
+      startCall("SOS_BUTTON");
+    }
+    else
+    {
+      Serial.println("[BTN] Button pressed — call already active (only operator can end)");
+    }
+  }
+  lastBtnState = btnState;
+
+  // ---- Fall detection polling (every 100ms) ----
+  static unsigned long lastFallCheck = 0;
+  if (millis() - lastFallCheck > 100)
+  {
+    lastFallCheck = millis();
+    if (checkFallDetection())
+    {
+      Serial.println("\n!!!  [FALL] FREE-FALL DETECTED  !!!");
+      if (!callActive)
+      {
+        startCall("FALL_DETECTED");
+      }
+      else if (wsConnected)
+      {
+        ws.sendTXT("FALL_DETECTED");
+      }
+    }
+  }
+
+  // ---- IMU diagnostics every 10 seconds ----
+  static unsigned long lastImuPrint = 0;
+  if (millis() - lastImuPrint > 10000)
+  {
+    lastImuPrint = millis();
+    imuPrintDiagnostics();
+  }
 
   // Print status every second
   if (millis() - lastHeapPrint > 1000)
