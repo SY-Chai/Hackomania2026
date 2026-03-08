@@ -451,7 +451,6 @@ export function setupSocket(io) {
           .insert([
             {
               start: getUTC8Time(),
-              end: getUTC8Time(),
               triage: "agent",
               // classification: "uncertain",
               severity: "uncertain",

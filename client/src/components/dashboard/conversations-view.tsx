@@ -131,7 +131,13 @@ function getInitials(name: string) {
     .toUpperCase();
 }
 
-type FilterTab = "all" | "urgent" | "uncertain" | "non_urgent" | "resolved";
+type FilterTab =
+  | "all"
+  | "active"
+  | "urgent"
+  | "uncertain"
+  | "non_urgent"
+  | "resolved";
 type LiveSpeaker = "user" | "agent";
 type TakeoverEvent = {
   conversationId: string;
@@ -182,7 +188,7 @@ interface Props {
 
 export function ConversationsView({ conversations, onCollapse }: Props) {
   const [liveConversations, setLiveConversations] = useState(conversations);
-  const [filter, setFilter] = useState<FilterTab>("all");
+  const [filter, setFilter] = useState<FilterTab>("active");
   const [selectedId, setSelectedId] = useState<string | null>(
     conversations[0]?.id ?? null,
   );
@@ -598,12 +604,19 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
   const filtered =
     filter === "all"
       ? orderedConversations
-      : filter === "resolved"
-        ? orderedConversations.filter((c) => !!c.end)
-        : orderedConversations.filter((c) => !c.end && c.severity === filter);
+      : filter === "active"
+        ? orderedConversations.filter((c) => !c.end)
+        : filter === "resolved"
+          ? orderedConversations.filter((c) => !!c.end)
+          : orderedConversations.filter((c) => !c.end && c.severity === filter);
 
   const tabs: { key: FilterTab; label: string; count: number }[] = [
     { key: "all", label: "All", count: liveConversations.length },
+    {
+      key: "active",
+      label: "Active",
+      count: liveConversations.filter((c) => !c.end).length,
+    },
     {
       key: "urgent",
       label: "Urgent",
@@ -769,7 +782,9 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
                         e.stopPropagation();
                         setResolvingId(conv.id);
                         try {
-                          await fetch(`/api/conversations/${conv.id}/resolve`, { method: "POST" });
+                          await fetch(`/api/conversations/${conv.id}/resolve`, {
+                            method: "POST",
+                          });
                           setLiveConversations((prev) =>
                             prev.map((c) =>
                               c.id === conv.id
@@ -1138,7 +1153,7 @@ export function ConversationsView({ conversations, onCollapse }: Props) {
               </div>
             </div>
           )}
-          <div className="h-full overflow-y-auto pl-2 pr-4 py-2">
+          <div className="h-full overflow-y-auto pl-2 pt-14 pr-4 py-2">
             <div className="space-y-4 max-w-3xl">
               {selected.messages.map((msg) => {
                 const cfg = senderConfig[msg.sender];
