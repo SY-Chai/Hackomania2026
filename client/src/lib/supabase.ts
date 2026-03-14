@@ -110,7 +110,7 @@ export async function fetchOngoingPabIds(): Promise<{
 
   const pabIds = new Set(
     messages
-      ?.filter((m) => m.users?.type === "pab")
+      ?.filter((m) => (Array.isArray(m.users) ? m.users[0]?.type : (m.users as { type: string } | null)?.type) === "pab")
       .map((m) => m.author_id)
       .filter((id): id is string => id !== null) ?? [],
   );
