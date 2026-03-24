@@ -79,7 +79,7 @@ The agent auto-detects the caller's language from the first few seconds of speec
 
 | Layer | Technology |
 |---|---|
-| Wearable | ESP32-S3 (DFRobot AI Camera Module), ST LSM6DSR IMU, PlatformIO, 3D-printed housing |
+| Wearable | ESP32-S3 (DFRobot AI Camera Module), ST LSM6DSR IMU, PlatformIO, FreeRTOS, 3D-printed housing |
 | Backend | Node.js, Express, Socket.IO, WebSockets |
 | AI agent | OpenAI Realtime API |
 | Triage | GPT-4o-mini with weighted medical rubric |
@@ -129,3 +129,5 @@ npm run dev
 ### Hardware (ESP32)
 
 Open `esp32/` in PlatformIO, set your WiFi credentials and server URL in the config, then flash to an ESP32-S3 AI Camera Module. ``board`` in ``platformio.ini`` should be set to ``dfrobot_firebeetle2_esp32s3``. An LSM6DSR IMU should be plugged into the JST-PH port on the module. The button requires soldering to the 4th microSD slot pin (GPIO12, SCLK).
+
+ To test bidirectional communication locally, use the Python scripts in ``esp32/tools``.
