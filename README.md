@@ -2,7 +2,16 @@
 
 A smart emergency response system for elderly residents in Singapore. When a senior activates their Personal Alert Button (PAB), PABand connects them to an AI voice agent that triages the situation in real time — in whatever language they speak — and alerts operators who can monitor, intervene, or dispatch help.
 
-Built at HackoMania 2026.
+Built at HackOMania 2026 by ``green block``.
+
+The team:
+| Member | Background |
+|---|---|
+| Tan Koh Ming | NSF, SP Computer Engineering alumnus |
+| Glenn Wu | NSF, SP Applied AI & Analytics alumnus |
+| Ng Wee Herng | NSF, SP Applied AI & Analytics alumnus |
+| Chai Shao Yang | Awaiting NS, ACJC alumnus |
+| Kenji Koh | Year 1 Student in Nanyang JC |
 
 ---
 
@@ -70,7 +79,7 @@ The agent auto-detects the caller's language from the first few seconds of speec
 
 | Layer | Technology |
 |---|---|
-| Wearable | ESP32-S3 (DFRobot FireBeetle2), 3D-printed housing |
+| Wearable | ESP32-S3 (DFRobot AI Camera Module), ST LSM6DSR IMU, PlatformIO, 3D-printed housing |
 | Backend | Node.js, Express, Socket.IO, WebSockets |
 | AI agent | OpenAI Realtime API |
 | Triage | GPT-4o-mini with weighted medical rubric |
@@ -117,6 +126,6 @@ npm install
 npm run dev
 ```
 
-### ESP32
+### Hardware (ESP32)
 
-Open `esp32/` in PlatformIO, set your WiFi credentials and server URL in the config, then flash to a FireBeetle2 ESP32-S3.
+Open `esp32/` in PlatformIO, set your WiFi credentials and server URL in the config, then flash to an ESP32-S3 AI Camera Module. ``board`` in ``platformio.ini`` should be set to ``dfrobot_firebeetle2_esp32s3``. An LSM6DSR IMU should be plugged into the JST-PH port on the module. The button requires soldering to the 4th microSD slot pin (GPIO12, SCLK).
